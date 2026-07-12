@@ -1,6 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 import logoUrl from './assets/Logo.png';
+
+const generarPeriodos = () => {
+  const periodos = [];
+  const fechaActual = new Date();
+  const añoActual = fechaActual.getFullYear();
+  const mesActual = fechaActual.getMonth(); // Enero es 0, Diciembre es 11
+  const opcionesMes = { month: 'long' };
+  
+  // Iterar desde el mes 0 (Enero) hasta el mes actual + 1
+  for (let i = 0; i <= mesActual + 1; i++) {
+    // Si estamos en diciembre (11), i=12 pasará automáticamente a Enero del próximo año
+    const fecha = new Date(añoActual, i, 1);
+    const mes = new Intl.DateTimeFormat('es-ES', opcionesMes).format(fecha).toUpperCase();
+    const año = fecha.getFullYear();
+    periodos.push(`${mes} ${año}`);
+  }
+  
+  return periodos.reverse(); // Muestra el mes más reciente de primero
+};
 
 function App() {
   // ==========================================
@@ -38,6 +57,15 @@ function App() {
   const [resultado, setResultado] = useState(null);
   const [error, setError] = useState(null);
   const [searchError, setSearchError] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  // Estados del Periodo
+  const [periodoLiq, setPeriodoLiq] = useState('JUNIO 2026');
+  const [quincenaPago, setQuincenaPago] = useState('1');
+  const [observaciones, setObservaciones] = useState("");
+  const [mostrarNota, setMostrarNota] = useState(false);
 
   // Estados CRM
   const [empleadorId, setEmpleadorId] = useState('');
@@ -45,6 +73,34 @@ function App() {
   const [empleadosEncontrados, setEmpleadosEncontrados] = useState([]);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState('');
   const [isContractOpen, setIsContractOpen] = useState(false);
+
+  // Efecto para auto-calcular el periodo actual
+  useEffect(() => {
+    const date = new Date();
+    const months = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
+    const currentMonth = months[date.getMonth()];
+    const currentYear = date.getFullYear();
+    setPeriodoLiq(`${currentMonth} ${currentYear}`);
+
+    if (date.getDate() <= 15) {
+      setQuincenaPago('1');
+    } else {
+      setQuincenaPago('2');
+    }
+  }, []);
+
+  // Efecto para sincronizar la Quincena con el Periodo de Pago del contrato
+  useEffect(() => {
+    const isMensual = formData.PERIODO_PAGO?.toUpperCase() === 'MENSUAL' || formData.PERIODO_PAGO?.toUpperCase() === 'MENSUALIDAD';
+    if (isMensual) {
+      setQuincenaPago('M');
+    } else {
+      if (quincenaPago === 'M') {
+        const date = new Date();
+        setQuincenaPago(date.getDate() <= 15 ? '1' : '2');
+      }
+    }
+  }, [formData.PERIODO_PAGO]);
 
   const SMLV_ACTUAL = 1750905;
 
@@ -296,6 +352,104 @@ function App() {
     }
   };
 
+  const handleGuardarHistorico = async () => {
+    if (!resultado) return;
+    setIsSaving(true);
+    setSaveMessage(null);
+    try {
+      const empleadoOriginal = empleadosEncontrados.find(emp => emp.ID_CONTRATO === resultado.ID_CONTRATO) || {};
+      const payloadCompleto = { ...empleadoOriginal, ...resultado };
+      
+      const payload = [payloadCompleto].map(empleado => ({
+        ...empleado,
+        PERIODO_LIQ: periodoLiq,
+        QUINCENA_PAGO: quincenaPago,
+        OBSERVACIONES: observaciones
+      }));
+
+      const response = await fetch('http://127.0.0.1:8000/api/v1/historico/guardar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setSaveMessage({ type: 'success', text: data.message || 'Nómina guardada exitosamente.' });
+    } catch (error) {
+      console.error('Error al guardar histórico:', error);
+      setSaveMessage({ type: 'error', text: 'Error al guardar la nómina en la base de datos.' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDescargarPDF = async () => {
+    if (!resultado) return;
+    setIsDownloading(true);
+    try {
+      const empleadoOriginal = empleadosEncontrados.find(emp => emp.ID_CONTRATO === resultado.ID_CONTRATO) || {};
+      const payloadCompleto = { 
+        ...empleadoOriginal, 
+        ...resultado,
+        PERIODO_LIQ: periodoLiq,
+        QUINCENA_PAGO: quincenaPago,
+        OBSERVACIONES: observaciones
+      };
+
+      const response = await fetch('http://127.0.0.1:8000/api/v1/comprobante/generar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payloadCompleto),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      
+      const periodoFormateado = periodoLiq ? periodoLiq.replace(/\s+/g, '_').toUpperCase() : 'SIN_PERIODO';
+      const quincenaFormateada = quincenaPago ? quincenaPago.replace(/\s+/g, '_').toUpperCase() : '';
+      
+      let sufijoQuincena = quincenaFormateada;
+      if (quincenaFormateada === "1") {
+          sufijoQuincena = "Q1";
+      } else if (quincenaFormateada === "2") {
+          sufijoQuincena = "Q2";
+      }
+      
+      const idContrato = resultado.ID_EMPLEADO || resultado.ID_CONTRATO || 'SIN_CONTRATO';
+      const nombreArchivo = sufijoQuincena 
+        ? `Desprendible_${idContrato}_${periodoFormateado}_${sufijoQuincena}.pdf`
+        : `Desprendible_${idContrato}_${periodoFormateado}.pdf`;
+
+      a.download = nombreArchivo;
+      document.body.appendChild(a);
+      a.click();
+
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+    } catch (error) {
+      console.error('Error al descargar PDF:', error);
+      alert('Hubo un error al generar el PDF. Por favor, intenta de nuevo.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   // ==========================================
   // BLOQUE 5: RENDERIZADO UI (COMPONENTES)
   // ==========================================
@@ -343,6 +497,67 @@ function App() {
             </div>
 
             <div className="px-8 pt-6">
+              {/* Bloque: Parámetros del Periodo */}
+              <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6">
+                <h4 className="text-sm font-bold text-slate-700 mb-3 uppercase tracking-wide">Parámetros del Periodo</h4>
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="flex-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Mes / Año</label>
+                    <select
+                      value={periodoLiq}
+                      onChange={(e) => setPeriodoLiq(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary transition-all text-slate-900 outline-none"
+                    >
+                      {generarPeriodos().map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Ciclo de Pago</label>
+                    <select
+                      value={quincenaPago}
+                      onChange={(e) => setQuincenaPago(e.target.value)}
+                      disabled={formData.PERIODO_PAGO?.toUpperCase() === 'MENSUAL' || formData.PERIODO_PAGO?.toUpperCase() === 'MENSUALIDAD'}
+                      className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary transition-all text-slate-900 outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                    >
+                      {(formData.PERIODO_PAGO?.toUpperCase() !== 'MENSUAL' && formData.PERIODO_PAGO?.toUpperCase() !== 'MENSUALIDAD') && (
+                        <>
+                          <option value="1">Primera Quincena (Q1)</option>
+                          <option value="2">Segunda Quincena (Q2)</option>
+                        </>
+                      )}
+                      {(formData.PERIODO_PAGO?.toUpperCase() === 'MENSUAL' || formData.PERIODO_PAGO?.toUpperCase() === 'MENSUALIDAD') && (
+                        <option value="M">Mensualidad Completa (M)</option>
+                      )}
+                    </select>
+                  </div>
+                </div>
+                
+                {/* Progressive Disclosure para Observaciones */}
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setMostrarNota(!mostrarNota)}
+                    className="text-xs font-semibold text-slate-500 hover:text-unifika-primary flex items-center transition-colors outline-none"
+                  >
+                    <svg className={`w-4 h-4 mr-1 transform transition-transform ${mostrarNota ? 'rotate-45 text-slate-400' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                    {mostrarNota ? 'Ocultar observación' : 'Añadir observación (Opcional)'}
+                  </button>
+                  
+                  {mostrarNota && (
+                    <div className="mt-3 animate-fade-in">
+                      <textarea
+                        value={observaciones}
+                        onChange={(e) => setObservaciones(e.target.value)}
+                        placeholder="Escribe aquí cualquier anotación para el periodo (ej. Descuento autorizado por gerencia)..."
+                        className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary transition-all text-slate-700 text-sm outline-none resize-none h-20 shadow-inner"
+                      ></textarea>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6">
                 <h4 className="text-sm font-bold text-slate-700 mb-3 uppercase tracking-wide">Búsqueda ID Empleador</h4>
                 <div className="flex flex-col md:flex-row gap-4">
@@ -803,6 +1018,40 @@ function App() {
                       <p className="text-3xl sm:text-4xl font-black tracking-tight text-white drop-shadow-md">
                         ${(resultado.NETO_PAGAR || 0).toLocaleString('es-CO')}
                       </p>
+                    </div>
+                  </div>
+
+                  {/* Nuevos botones: Guardar y Descargar PDF */}
+                  <div className="p-5 bg-slate-50 border-t border-slate-200 flex flex-col gap-3">
+                    {saveMessage && (
+                      <div className={`p-3 rounded text-sm ${saveMessage.type === 'success' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                        {saveMessage.text}
+                      </div>
+                    )}
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <button
+                        onClick={handleGuardarHistorico}
+                        disabled={isSaving}
+                        className={`flex-1 flex items-center justify-center px-4 py-2.5 text-sm font-bold rounded-xl transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${isSaving ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                      >
+                        {isSaving ? 'Guardando...' : 'Guardar Histórico'}
+                      </button>
+
+                      <button
+                        onClick={handleDescargarPDF}
+                        disabled={isDownloading}
+                        className={`flex-1 flex items-center justify-center px-4 py-2.5 text-sm font-bold rounded-xl transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 ${isDownloading ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-900 text-white'}`}
+                      >
+                        {isDownloading ? (
+                          <>
+                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-slate-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Generando PDF...
+                          </>
+                        ) : 'Descargar Desprendible'}
+                      </button>
                     </div>
                   </div>
                 </div>

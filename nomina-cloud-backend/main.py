@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import math
 import datetime
 import os
@@ -184,9 +183,6 @@ async def obtener_empleados_por_empleador(id_contacto: str):
             resp_contactos.raise_for_status()
             data_contactos = resp_contactos.json()
             
-            print("----- JSON CRUDO CONTACTOS -----")
-            print(data_contactos)
-            print("--------------------------------")
             
             # Verificar si existe "data" y si tiene elementos
             if not data_contactos.get("data") or len(data_contactos["data"]) == 0:
@@ -195,6 +191,12 @@ async def obtener_empleados_por_empleador(id_contacto: str):
             contacto_data = data_contactos["data"][0]
             nombre_empleador = contacto_data.get("namecontact")
             contacto_interno_id = str(contacto_data.get("id", ""))
+            tipo_doc_empleador = contacto_data.get("Tipo ID Contacto", "NIT")
+            rut_empleador = contacto_data.get("ID Contacto", "000.000.000-0")
+            tipo_empleador = contacto_data.get("Tipo Empleador", "PERSONA JURÍDICA")
+            telefono_raw = contacto_data.get("telephonecontact", {})
+            telefono = telefono_raw.get("value", "") if isinstance(telefono_raw, dict) else ""
+            email = contacto_data.get("emailcontact", "")
             
             if not nombre_empleador:
                 raise HTTPException(status_code=400, detail="El contacto encontrado no tiene un nombre válido ('namecontact').")
@@ -231,7 +233,6 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                     raise ValueError("Búsqueda por ID vacía")
                     
             except Exception as e:
-                print(f"Aviso: Búsqueda por ID Contacto falló. Intentando fallback por nombre exacto. Error: {e}")
                 # Fallback: usar el nombre original exacto (sin normalizar) tal cual está en la base de datos de Wolkvox
                 payload_oportunidades["field"] = "Contact"
                 payload_oportunidades["value"] = nombre_empleador
@@ -241,13 +242,8 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                     resp_oportunidades.raise_for_status()
                     data_oportunidades = resp_oportunidades.json()
                 except Exception as e2:
-                    print(f"Aviso: Búsqueda de oportunidades falló o sin resultados para '{nombre_empleador}'. Error: {e2}")
                     data_oportunidades = {}
 
-            print("----- JSON CRUDO OPORTUNIDADES -----")
-            print(data_oportunidades)
-            print("------------------------------------")
-            
             if data_oportunidades.get("data") and len(data_oportunidades["data"]) > 0:
                 empleados_wolkvox = data_oportunidades["data"]
             
@@ -313,6 +309,17 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                 if not nombre_completo:
                     nombre_completo = extract_val(empleado, "Nombre del Empleado", "")
 
+                nombre_1 = extract_val(empleado, "NOMBRE_1", "")
+                nombre_2 = extract_val(empleado, "NOMBRE_2", "")
+                apellido_1 = extract_val(empleado, "APELLIDO_1", "")
+                apellido_2 = extract_val(empleado, "APELLIDO_2", "")
+                departamento = extract_val(empleado, "Departamento", "")
+                municipio = extract_val(empleado, "Municipio", "")
+                riesgo_arl = extract_val(empleado, "Tipo de Riesgo ARL", "")
+                ccf = extract_val(empleado, "CAJA COMPENSACION", "")
+                nombre_arl = extract_val(empleado, "ARL", "")
+
+                tipo_id_empleado = extract_val(empleado, "Tipo ID Empleado", "")
                 tipo_contrato = extract_val(empleado, "Condicion Laboral", "TIEMPO COMPLETO")
                 tipo_labor = extract_val(empleado, "Tipo de Labor", "")
                 periodo_pago = extract_val(empleado, "Frecuencia de Pago", "QUINCENAL")
@@ -347,8 +354,28 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                     vlr_bono = float(vlr_bono)
                 except:
                     vlr_bono = 0
+                    
+                if str(con_bono).strip().upper() == "NO":
+                    vlr_bono = 0
 
                 empleados_limpios.append({
+                    "RAZON_SOCIAL": nombre_empleador,
+                    "ID_APORTANTE": str(rut_empleador),
+                    "TIPO_DOCUMENTO": str(tipo_doc_empleador).upper(),
+                    "TIPO_EMPLEADOR": str(tipo_empleador).upper(),
+                    "TELEFONO_APORTANTE": str(telefono),
+                    "EMAIL_APORTANTE": str(email),
+                    "T_ID_EMPLEADO": str(tipo_id_empleado).upper(),
+                    "NOMBRE_1": str(nombre_1).upper(),
+                    "NOMBRE_2": str(nombre_2).upper(),
+                    "APELLIDO_1": str(apellido_1).upper(),
+                    "APELLIDO_2": str(apellido_2).upper(),
+                    "DEPARTAMENTO": str(departamento).upper(),
+                    "MUNICIPIO": str(municipio).upper(),
+                    "RIESGO_ARL": str(riesgo_arl).upper(),
+                    "CCF": str(ccf).upper(),
+                    "NOMBRE_ARL": str(nombre_arl).upper(),
+                    "CARGO": str(tipo_labor).upper() if tipo_labor else "NO ESPECIFICADO",
                     "ID_CONTRATO": llave_unica,
                     "ID_EMPLEADO": empleado.get("ID Empleado"),
                     "NOMBRE_EMPLEADO": nombre_completo,
@@ -632,7 +659,18 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     HR_MES = 210
     factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05, 'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
 
-    periodo_actual = formatear_periodo(row.get('PERIODO_LIQ'))
+    periodo_liq = formatear_periodo(row.get('PERIODO_LIQ', 'SIN PERIODO'))
+    quincena_pago = str(row.get('QUINCENA_PAGO', '')).strip().upper()
+    
+    if quincena_pago in ['1', 'Q1']:
+        texto_periodo = f"Primera Quincena de {periodo_liq}"
+    elif quincena_pago in ['2', 'Q2']:
+        texto_periodo = f"Segunda Quincena de {periodo_liq}"
+    elif quincena_pago in ['M', 'MENSUAL']:
+        texto_periodo = f"Mensualidad de {periodo_liq}"
+    else:
+        texto_periodo = periodo_liq
+
     id_empleado = str(row.get('ID_EMPLEADO', 'SIN_EMPLEADO')).strip()
 
     sal_ref_fila = forzar_numero(row.get('SAL_REF', 0))
@@ -644,7 +682,7 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
         'tipo': str(row.get('TIPO_DOCUMENTO', 'PERSONA JURÍDICA'))
     }
 
-    pdf = ComprobantePDF(datos_emp, periodo_actual)
+    pdf = ComprobantePDF(datos_emp, texto_periodo)
     pdf.add_page()
 
     # --- BLOQUE INFORMACIÓN EMPLEADO ---
@@ -681,15 +719,27 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
 
     label_sueldo = "Sueldo Efectivo" if forzar_numero(row.get('SAL_ESPECIE_PAGADO', 0)) > 0 else "Sueldo por Días Trabajados"
 
+    val_vacaciones = float(row.get('VALOR_VACACIONES', 0) or 0)
+    dias_vac = float(row.get('DIAS_VACACIONES', 0) or 0)
+    val_incapacidad = float(row.get('VALOR_INCAPACIDAD', 0) or 0)
+    dias_inc = float(row.get('DIAS_INCAPACIDAD', 0) or 0)
+
     conceptos_fijos = [
         (f"{label_sueldo} ({d_trab:.0f} días)", 'SUELDO_EFECTIVO_PAGADO'),
-        (f"Salario en Especie ({d_trab:.0f} días)", 'SAL_ESPECIE_PAGADO'),
-        (f"Vacaciones Disfrutadas ({d_vac:.0f} días)", 'PAGO_VACACIONES'),
-        (f"Incapacidad Remunerada ({d_inc:.0f} días)", 'PAGO_INCAPACIDAD'),
+        (f"Salario en Especie ({d_trab:.0f} días)", 'SALARIO_ESPECIE_MES')
+    ]
+    
+    if val_vacaciones > 0:
+        conceptos_fijos.append((f"Vacaciones ({dias_vac:.0f} días)", 'VALOR_VACACIONES'))
+        
+    if val_incapacidad > 0:
+        conceptos_fijos.append((f"Incapacidades ({dias_inc:.0f} días)", 'VALOR_INCAPACIDAD'))
+        
+    conceptos_fijos.extend([
         ("Bono No Salarial", 'BONO_PAGADO'),
         ("Auxilio de Transporte", 'VAL_AUX_TTE'),
         ("Prima de Servicios", 'PRIMA_CALC')
-    ]
+    ])
 
     for desc, col in conceptos_fijos:
         val = forzar_numero(row.get(col, 0))
@@ -712,7 +762,7 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
         ("Aporte Salud (4%)", 'SALUD_4'),
         ("Aporte Pensión (4%)", 'PENSION_4'),
         ("Descuento por Préstamos", 'PRESTAMOS'),
-        ("Salario Especie (Recibido)", 'SAL_ESPECIE_PAGADO')
+        ("Salario Especie (Recibido)", 'SALARIO_ESPECIE_MES')
     ]
 
     for desc, col in deducciones:
@@ -739,6 +789,15 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     pdf.cell(45, 10, f"${forzar_numero(row.get('NETO_PAGAR', 0)):,.0f}", border=1, align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_text_color(0, 0, 0)
 
+    # --- OBSERVACIONES ---
+    observaciones = row.get("OBSERVACIONES", "").strip()
+    if observaciones:
+        pdf.ln(5)
+        pdf.set_font('helvetica', 'B', 9)
+        pdf.cell(0, 5, "Observaciones:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font('helvetica', '', 9)
+        pdf.multi_cell(0, 5, observaciones)
+
     # --- FIRMAS ---
     pdf.ln(17)
     y_firma = pdf.get_y()
@@ -761,10 +820,22 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
 
     pdf_bytes = bytes(pdf.output())
     
+    id_contrato = row.get('ID_CONTRATO', 'SIN_CONTRATO')
+    periodo_liq_raw = row.get('PERIODO_LIQ', 'SIN_PERIODO')
+    quincena_pago_raw = row.get('QUINCENA_PAGO', '')
+    
+    periodo_seguro = str(periodo_liq_raw).replace(" ", "_").upper()
+    quincena_segura = str(quincena_pago_raw).replace(" ", "_").upper()
+    
+    if quincena_segura:
+        nombre_archivo = f"Desprendible_{id_contrato}_{periodo_seguro}_{quincena_segura}.pdf"
+    else:
+        nombre_archivo = f"Desprendible_{id_contrato}_{periodo_seguro}.pdf"
+    
     return Response(
         content=pdf_bytes, 
         media_type="application/pdf",
-        headers={'Content-Disposition': 'attachment; filename="comprobante.pdf"'}
+        headers={'Content-Disposition': f'attachment; filename={nombre_archivo}'}
     )
 
 @app.post("/api/v1/historico/guardar")
@@ -788,16 +859,68 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
         
     df_entrada = df_entrada.drop_duplicates(subset=['ID_CONTRATO'], keep='last')
     
-    # 3. Preparar la inserción / actualización en t_novedades
+    # 3. Preparar la inserción / actualización en cascada (Aportante -> Empleado -> Novedades)
+    upsert_aportante_query = text("""
+        INSERT INTO m_aportantes (id_aportante, razon_social, tipo_documento, tipo_empleador, telefono, email)
+        VALUES (:id_aportante, :razon_social, :tipo_documento, :tipo_empleador, :telefono, :email)
+        ON CONFLICT (id_aportante) DO UPDATE SET
+            razon_social = EXCLUDED.razon_social,
+            tipo_documento = EXCLUDED.tipo_documento,
+            tipo_empleador = EXCLUDED.tipo_empleador,
+            telefono = EXCLUDED.telefono,
+            email = EXCLUDED.email;
+    """)
+
+    upsert_empleado_query = text("""
+        INSERT INTO m_empleados (
+            id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado,
+            cargo, tipo_contrato, estado_empleado, periodo_pago, salario_base,
+            vlr_bono, sal_especie, eps, afp, es_smlv, con_bono, tiene_aux,
+            nombre_1, nombre_2, apellido_1, apellido_2, departamento, municipio, riesgo_arl, ccf, arl
+        ) VALUES (
+            :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
+            :cargo, :tipo_contrato, :estado_empleado, :periodo_pago, :salario_base,
+            :vlr_bono, :sal_especie, :eps, :afp, :es_smlv, :con_bono, :tiene_aux,
+            :nombre_1, :nombre_2, :apellido_1, :apellido_2, :departamento, :municipio, :riesgo_arl, :ccf, :arl
+        ) ON CONFLICT (id_contrato) DO UPDATE SET
+            id_aportante = EXCLUDED.id_aportante,
+            id_empleado = EXCLUDED.id_empleado,
+            t_id_empleado = EXCLUDED.t_id_empleado,
+            nombre_empleado = EXCLUDED.nombre_empleado,
+            cargo = EXCLUDED.cargo,
+            tipo_contrato = EXCLUDED.tipo_contrato,
+            estado_empleado = EXCLUDED.estado_empleado,
+            periodo_pago = EXCLUDED.periodo_pago,
+            salario_base = EXCLUDED.salario_base,
+            vlr_bono = EXCLUDED.vlr_bono,
+            sal_especie = EXCLUDED.sal_especie,
+            eps = EXCLUDED.eps,
+            afp = EXCLUDED.afp,
+            es_smlv = EXCLUDED.es_smlv,
+            con_bono = EXCLUDED.con_bono,
+            tiene_aux = EXCLUDED.tiene_aux,
+            nombre_1 = EXCLUDED.nombre_1,
+            nombre_2 = EXCLUDED.nombre_2,
+            apellido_1 = EXCLUDED.apellido_1,
+            apellido_2 = EXCLUDED.apellido_2,
+            departamento = EXCLUDED.departamento,
+            municipio = EXCLUDED.municipio,
+            riesgo_arl = EXCLUDED.riesgo_arl,
+            ccf = EXCLUDED.ccf,
+            arl = EXCLUDED.arl;
+    """)
+
     upsert_query = text("""
         INSERT INTO t_novedades (
             id_contrato, periodo_liq, quincena_pago, generar_nomina, 
             dias_laborados, horas_laboradas, dias_vacaciones, dias_incapacidad,
-            prestamos, prima_calc, hed, hen, hedf, henf, rn, rdn, rnf, observaciones
+            prestamos, prima_calc, hed, hen, hedf, henf, rn, rdn, rnf, observaciones,
+            ibc_pila, salud_4, pension_4, total_devengado, total_deducido, neto_pagar
         ) VALUES (
             :id_contrato, :periodo_liq, :quincena_pago, :generar_nomina,
             :dias_laborados, :horas_laboradas, :dias_vacaciones, :dias_incapacidad,
-            :prestamos, :prima_calc, :hed, :hen, :hedf, :henf, :rn, :rdn, :rnf, :observaciones
+            :prestamos, :prima_calc, :hed, :hen, :hedf, :henf, :rn, :rdn, :rnf, :observaciones,
+            :ibc_pila, :salud_4, :pension_4, :total_devengado, :total_deducido, :neto_pagar
         )
         ON CONFLICT (id_contrato, periodo_liq, quincena_pago)
         DO UPDATE SET
@@ -816,12 +939,63 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             rdn = EXCLUDED.rdn,
             rnf = EXCLUDED.rnf,
             observaciones = EXCLUDED.observaciones,
-            created_at = CURRENT_TIMESTAMP;
+            ibc_pila = EXCLUDED.ibc_pila,
+            salud_4 = EXCLUDED.salud_4,
+            pension_4 = EXCLUDED.pension_4,
+            total_devengado = EXCLUDED.total_devengado,
+            total_deducido = EXCLUDED.total_deducido,
+            neto_pagar = EXCLUDED.neto_pagar,
+            created_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota';
     """)
     
     records_saved = 0
     try:
         for _, row in df_entrada.iterrows():
+            # Params para aportante
+            params_aportante = {
+                "id_aportante": str(row.get('ID_APORTANTE', '')).strip(),
+                "razon_social": str(row.get('RAZON_SOCIAL', '')).strip(),
+                "tipo_documento": str(row.get('TIPO_DOCUMENTO', '')).strip(),
+                "tipo_empleador": str(row.get('TIPO_EMPLEADOR', '')).strip(),
+                "telefono": str(row.get('TELEFONO_APORTANTE', '')).strip(),
+                "email": str(row.get('EMAIL_APORTANTE', '')).strip()
+            }
+
+            # Params para empleado
+            es_smlv_bool = str(row.get('ES_SMLV', '')).strip().upper() in ['SI', 'TRUE', '1']
+            con_bono_bool = str(row.get('CON_BONO', '')).strip().upper() in ['SI', 'TRUE', '1']
+            tiene_aux_bool = str(row.get('TIENE_AUX', '')).strip().upper() in ['SI', 'TRUE', '1']
+
+            params_empleado = {
+                "id_contrato": str(row.get('ID_CONTRATO')).strip(),
+                "id_aportante": str(row.get('ID_APORTANTE', '')).strip(),
+                "id_empleado": str(row.get('ID_EMPLEADO', '')).strip(),
+                "t_id_empleado": str(row.get('T_ID_EMPLEADO', '')).strip(),
+                "nombre_empleado": str(row.get('NOMBRE_EMPLEADO', '')).strip(),
+                "cargo": str(row.get('CARGO', '')).strip() or str(row.get('CARGO_DESEMPENEADO', '')).strip(),
+                "tipo_contrato": str(row.get('TIPO_CONTRATO', '')).strip(),
+                "estado_empleado": str(row.get('ESTADO_EMPLEADO', 'ACTIVO')).strip(),
+                "periodo_pago": str(row.get('PERIODO_PAGO', '')).strip(),
+                "salario_base": forzar_numero(row.get('SALARIO_BASE', 0)),
+                "vlr_bono": forzar_numero(row.get('VLR_BONO', 0)),
+                "sal_especie": forzar_numero(row.get('SALARIO_ESPECIE', 0)),
+                "eps": str(row.get('EPS', '')).strip(),
+                "afp": str(row.get('FONDO_PENSIONES', '')).strip() or str(row.get('FONDO DE PENSIONES', '')).strip(),
+                "es_smlv": es_smlv_bool,
+                "con_bono": con_bono_bool,
+                "tiene_aux": tiene_aux_bool,
+                "nombre_1": str(row.get('NOMBRE_1', '')).strip(),
+                "nombre_2": str(row.get('NOMBRE_2', '')).strip(),
+                "apellido_1": str(row.get('APELLIDO_1', '')).strip(),
+                "apellido_2": str(row.get('APELLIDO_2', '')).strip(),
+                "departamento": str(row.get('DEPARTAMENTO', '')).strip(),
+                "municipio": str(row.get('MUNICIPIO', '')).strip(),
+                "riesgo_arl": str(row.get('RIESGO_ARL', '')).strip(),
+                "ccf": str(row.get('CCF', '')).strip(),
+                "arl": str(row.get('NOMBRE_ARL', '')).strip()
+            }
+
+            # Params para novedad
             params = {
                 "id_contrato": str(row.get('ID_CONTRATO')).strip(),
                 "periodo_liq": str(row.get('PERIODO_LIQ')).strip(),
@@ -840,8 +1014,17 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "rn": forzar_numero(row.get('RN', 0)),
                 "rdn": forzar_numero(row.get('RDN', 0)),
                 "rnf": forzar_numero(row.get('RNF', 0)),
-                "observaciones": str(row.get('OBSERVACIONES', '')) if pd.notnull(row.get('OBSERVACIONES')) else None
+                "observaciones": str(row.get('OBSERVACIONES', '')) if pd.notnull(row.get('OBSERVACIONES')) else None,
+                "ibc_pila": forzar_numero(row.get('IBC_PILA', 0)),
+                "salud_4": forzar_numero(row.get('SALUD_4', 0)),
+                "pension_4": forzar_numero(row.get('PENSION_4', 0)),
+                "total_devengado": forzar_numero(row.get('TOTAL_DEVENGADO', 0)),
+                "total_deducido": forzar_numero(row.get('TOTAL_DEDUCIDO', 0)),
+                "neto_pagar": forzar_numero(row.get('NETO_PAGAR', 0))
             }
+            
+            db.execute(upsert_aportante_query, params_aportante)
+            db.execute(upsert_empleado_query, params_empleado)
             db.execute(upsert_query, params)
             records_saved += 1
             
