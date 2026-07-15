@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Dict, Any, Union
 from database import get_db
+from pydantic import BaseModel
 import httpx
+from core.security import get_current_user, get_current_user_unblocked, supabase_client
+
+# NO BORRAR: Requerido por el motor matemático
+import numpy as np
+import pandas as pd
 
 # =========================================================
 # CONSTANTES Y FUNCIONES DE UTILIDAD (HELPERS)
@@ -29,20 +35,24 @@ NOMBRES_EXTRAS = {
     'RNF': 'RECARGO FESTIVO NOCTURNO (1.15)'
 }
 
+
 def forzar_numero(valor):
     try:
         return float(valor) if pd.notnull(valor) else 0.0
     except:
         return 0.0
 
+
 def formatear_periodo(valor):
-    if pd.isnull(valor): return "SIN PERIODO"
+    if pd.isnull(valor):
+        return "SIN PERIODO"
     if isinstance(valor, (pd.Timestamp, datetime.datetime)):
         return valor.strftime('%B %Y').upper()
     try:
         return pd.to_datetime(valor).strftime('%B %Y').upper()
     except:
         return str(valor).upper()
+
 
 class ComprobantePDF(FPDF):
     def __init__(self, datos_empleador, periodo_liq):
@@ -59,22 +69,28 @@ class ComprobantePDF(FPDF):
                 self.image(logo_path, x=10, y=10, w=190)
 
         self.set_font('helvetica', 'B', 11)
-        self.cell(0, 5, self.emp_nombre, align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 5, self.emp_nombre, align='R',
+                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.set_font('helvetica', '', 9)
-        self.cell(0, 4, f"RUT: {self.emp_nit}", align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.cell(0, 4, f"Tipo: {self.emp_tipo}", align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 4, f"RUT: {self.emp_nit}", align='R',
+                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 4, f"Tipo: {self.emp_tipo}",
+                  align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         self.ln(4)
 
         self.set_font('helvetica', 'B', 12)
-        self.cell(0, 10, 'COMPROBANTE INDIVIDUAL DE PAGO DE NÓMINA', align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 10, 'COMPROBANTE INDIVIDUAL DE PAGO DE NÓMINA',
+                  align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.set_font('helvetica', '', 11)
-        self.cell(0, 5, f'Periodo de Pago: {self.periodo_liq}', align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 5, f'Periodo de Pago: {self.periodo_liq}',
+                  align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.ln(5)
 
 # =========================================================
 # INICIALIZACIÓN DE LA APLICACIÓN FASTAPI
 # =========================================================
+
 
 app = FastAPI(
     title="Nómina Cloud API",
@@ -89,6 +105,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.get("/")
 def read_root(db: Session = Depends(get_db)):
@@ -111,6 +128,7 @@ def read_root(db: Session = Depends(get_db)):
             "message": f"Error de conexión a la base de datos: {str(e)}"
         }
 
+
 @app.get("/api/v1/mi-ip")
 async def get_my_ip():
     """Endpoint temporal para conocer la IP pública del servidor."""
@@ -119,15 +137,93 @@ async def get_my_ip():
         response.raise_for_status()
         return response.json()
 
+
+@app.get("/api/v1/auth/sync-status")
+async def sync_auth_status(current_user: dict = Depends(get_current_user_unblocked), db: Session = Depends(get_db)):
+    """Endpoint para sincronizar el estado_contacto con Wolkvox (silencioso)."""
+    user_email = current_user.get("email")
+    if not user_email:
+        raise HTTPException(
+            status_code=400, detail="No email provided in token.")
+
+    wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
+    if not wolkvox_token:
+        # Fallback si no hay token de Wolkvox
+        return {"estado_contacto": current_user.get("estado_contacto")}
+
+    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+    headers = {"Content-Type": "application/json"}
+    payload_contacto = {
+        "operation": "techcon",
+        "wolkvox-token": wolkvox_token,
+        "module": "contacts",
+        "field": "emailcontact",
+        "value": user_email
+    }
+
+    nuevo_estado = current_user.get("estado_contacto")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
+            if resp_contactos.status_code == 200:
+                data_contactos = resp_contactos.json()
+                if data_contactos.get("data") and len(data_contactos["data"]) > 0:
+                    contacto_data = data_contactos["data"][0]
+                    nuevo_estado = contacto_data.get("Estado Contacto")
+
+                    # Update local database
+                    update_query = text(
+                        "UPDATE m_aportantes SET estado_contacto = :estado WHERE email ILIKE :email")
+                    db.execute(update_query, {
+                               "estado": nuevo_estado, "email": user_email})
+                    db.commit()
+    except Exception as e:
+        pass
+
+    return {"estado_contacto": nuevo_estado}
+
+
+@app.get("/api/v1/perfil")
+async def get_perfil_usuario(current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint protegido para validar el token de Supabase Auth y devolver el perfil (m_aportantes).
+    """
+    return {
+        "status": "success",
+        "message": "Token válido y autenticación exitosa.",
+        "data": current_user
+    }
+
+
+@app.get("/api/v1/historico/ultimo-dias/{id_contrato}")
+def obtener_ultimo_dias_laborados(id_contrato: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    query = text("""
+        SELECT dias_laborados 
+        FROM t_novedades 
+        WHERE id_contrato = :id_contrato 
+        ORDER BY created_at DESC 
+        LIMIT 1
+    """)
+    resultado = db.execute(
+        query, {"id_contrato": id_contrato}).mappings().first()
+
+    if resultado:
+        return {"status": "success", "dias_laborados": resultado["dias_laborados"]}
+    return {"status": "not_found", "dias_laborados": 0}
+
+
 @app.get("/api/v1/empleador/{id_contacto}/empleados")
-async def obtener_empleados_por_empleador(id_contacto: str):
+async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict = Depends(get_current_user)):
     """
     Endpoint (Proxy) para obtener todos los empleados de un empleador.
     Realiza orquestación consultando Módulo Contactos y Módulo Oportunidades de Wolkvox.
+    Aplica seguridad basada en roles (SuperAdmin vs Empleador).
     """
+    if current_user.get("rol") != "SuperAdmin":
+        id_contacto = current_user["id_aportante"]
     wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
-    
+
     headers = {
         "Content-Type": "application/json"
     }
@@ -182,28 +278,32 @@ async def obtener_empleados_por_empleador(id_contacto: str):
             resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
             resp_contactos.raise_for_status()
             data_contactos = resp_contactos.json()
-            
-            
+
             # Verificar si existe "data" y si tiene elementos
             if not data_contactos.get("data") or len(data_contactos["data"]) == 0:
-                raise HTTPException(status_code=404, detail="El empleador no existe en el Módulo de Contactos de Wolkvox.")
-                
+                raise HTTPException(
+                    status_code=404, detail="El empleador no existe en el Módulo de Contactos de Wolkvox.")
+
             contacto_data = data_contactos["data"][0]
             nombre_empleador = contacto_data.get("namecontact")
             contacto_interno_id = str(contacto_data.get("id", ""))
             tipo_doc_empleador = contacto_data.get("Tipo ID Contacto", "NIT")
             rut_empleador = contacto_data.get("ID Contacto", "000.000.000-0")
-            tipo_empleador = contacto_data.get("Tipo Empleador", "PERSONA JURÍDICA")
+            tipo_empleador = contacto_data.get(
+                "Tipo Empleador", "PERSONA JURÍDICA")
             telefono_raw = contacto_data.get("telephonecontact", {})
-            telefono = telefono_raw.get("value", "") if isinstance(telefono_raw, dict) else ""
+            telefono = telefono_raw.get("value", "") if isinstance(
+                telefono_raw, dict) else ""
             email = contacto_data.get("emailcontact", "")
-            
+
             if not nombre_empleador:
-                raise HTTPException(status_code=400, detail="El contacto encontrado no tiene un nombre válido ('namecontact').")
+                raise HTTPException(
+                    status_code=400, detail="El contacto encontrado no tiene un nombre válido ('namecontact').")
 
             estado_contacto = contacto_data.get("Estado Contacto")
             if estado_contacto in ["RETIRADO", "UnicaAfiliacion", "En Mora SS"]:
-                raise HTTPException(status_code=403, detail='El cliente se encuentra registrado en el sistema, pero actualmente no cuenta con este servicio habilitado.')
+                raise HTTPException(
+                    status_code=403, detail='El cliente se encuentra registrado en el sistema, pero actualmente no cuenta con este servicio habilitado.')
 
             # Helper para normalizar texto (minúsculas, sin tildes, sin espacios extra)
             def normalizar_texto(texto):
@@ -222,21 +322,21 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                 "field": "ID Contacto",
                 "value": id_contacto
             }
-            
+
             empleados_wolkvox = []
             try:
                 resp_oportunidades = await client.post(url_wolkvox, json=payload_oportunidades, headers=headers)
                 resp_oportunidades.raise_for_status()
                 data_oportunidades = resp_oportunidades.json()
-                
+
                 if not data_oportunidades.get("data") or len(data_oportunidades["data"]) == 0:
                     raise ValueError("Búsqueda por ID vacía")
-                    
+
             except Exception as e:
                 # Fallback: usar el nombre original exacto (sin normalizar) tal cual está en la base de datos de Wolkvox
                 payload_oportunidades["field"] = "Contact"
                 payload_oportunidades["value"] = nombre_empleador
-                
+
                 try:
                     resp_oportunidades = await client.post(url_wolkvox, json=payload_oportunidades, headers=headers)
                     resp_oportunidades.raise_for_status()
@@ -246,7 +346,7 @@ async def obtener_empleados_por_empleador(id_contacto: str):
 
             if data_oportunidades.get("data") and len(data_oportunidades["data"]) > 0:
                 empleados_wolkvox = data_oportunidades["data"]
-            
+
             if not empleados_wolkvox:
                 # Asignar valores por defecto para que la ejecución no se rompa
                 empleados_wolkvox = [{
@@ -263,6 +363,7 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                     "FONDO DE PENSIONES": "N/A"
                 }]
             # Helpers para la extracción anidada de campos personalizados de Wolkvox
+
             def extract_val(d, key, default=None):
                 val = d.get(key)
                 if isinstance(val, dict):
@@ -276,10 +377,11 @@ async def obtener_empleados_por_empleador(id_contacto: str):
             nombre_contacto_norm = normalizar_texto(nombre_empleador)
             empleados_filtrados = []
             for opp in empleados_wolkvox:
-                nombre_opp = str(extract_val(opp, "Contact", "")) or str(extract_val(opp, "Nombre del Empleado", ""))
+                nombre_opp = str(extract_val(opp, "Contact", "")) or str(
+                    extract_val(opp, "Nombre del Empleado", ""))
                 if nombre_contacto_norm in normalizar_texto(nombre_opp) or normalizar_texto(nombre_opp) in nombre_contacto_norm:
                     empleados_filtrados.append(opp)
-            
+
             if not empleados_filtrados and empleados_wolkvox:
                 empleados_filtrados = empleados_wolkvox
 
@@ -289,25 +391,27 @@ async def obtener_empleados_por_empleador(id_contacto: str):
             for empleado in empleados_filtrados:
                 if empleado.get("wolkvox_fase") == "Retirado":
                     continue
-                    
+
                 id_empleado_extraido = extract_val(empleado, "ID Empleado")
-                
+
                 # Asegurar de tener un ID de empleado distinto al ID del empleador
                 if not id_empleado_extraido or str(id_empleado_extraido) == str(id_contacto):
-                    id_empleado = str(empleado.get("id") or empleado.get("contact_id") or contacto_interno_id)
+                    id_empleado = str(empleado.get("id") or empleado.get(
+                        "contact_id") or contacto_interno_id)
                 else:
                     id_empleado = str(id_empleado_extraido)
-                    
+
                 if not id_empleado:
                     continue  # Ignorar registros sin ID Empleado válido
-                
+
                 # Llave compuesta
                 llave_unica = f"{id_contacto}_{id_empleado}"
-                
+
                 # Extracción de campos
                 nombre_completo = empleado.get("Nombre del Empleado", "")
                 if not nombre_completo:
-                    nombre_completo = extract_val(empleado, "Nombre del Empleado", "")
+                    nombre_completo = extract_val(
+                        empleado, "Nombre del Empleado", "")
 
                 nombre_1 = extract_val(empleado, "NOMBRE_1", "")
                 nombre_2 = extract_val(empleado, "NOMBRE_2", "")
@@ -319,42 +423,50 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                 ccf = extract_val(empleado, "CAJA COMPENSACION", "")
                 nombre_arl = extract_val(empleado, "ARL", "")
 
-                tipo_id_empleado = extract_val(empleado, "Tipo ID Empleado", "")
-                tipo_contrato = extract_val(empleado, "Condicion Laboral", "TIEMPO COMPLETO")
+                tipo_id_empleado = extract_val(
+                    empleado, "Tipo ID Empleado", "")
+                tipo_contrato = extract_val(
+                    empleado, "Condicion Laboral", "TIEMPO COMPLETO")
                 tipo_labor = extract_val(empleado, "Tipo de Labor", "")
-                periodo_pago = extract_val(empleado, "Frecuencia de Pago", "QUINCENAL")
+                periodo_pago = extract_val(
+                    empleado, "Frecuencia de Pago", "QUINCENAL")
                 es_smlv = extract_val(empleado, "Salario Minimo", "SI")
                 salario_base = extract_val(empleado, "Salario Base", 1750905)
-                salario_especie = extract_val(empleado, "Salario en Especie", 0)
+                salario_especie = extract_val(
+                    empleado, "Salario en Especie", 0)
                 con_bono = extract_val(empleado, "Bono NO Salarial", "NO")
                 vlr_bono = extract_val(empleado, "Vlr Bono", 0)
-                
+                link_drive = extract_val(empleado, "Link Nomina Empleado", "")
+
                 eps = extract_val(empleado, "EPS", "")
-                fondo_pensiones = extract_val(empleado, "FONDO DE PENSIONES", "")
-                
-                raw_no_incluye = extract_val(empleado, "No Incluye Auxilio de Tte", "")
-                val_no_incluye = str(raw_no_incluye).strip().upper() if raw_no_incluye is not None else ""
+                fondo_pensiones = extract_val(
+                    empleado, "FONDO DE PENSIONES", "")
+
+                raw_no_incluye = extract_val(
+                    empleado, "No Incluye Auxilio de Tte", "")
+                val_no_incluye = str(raw_no_incluye).strip(
+                ).upper() if raw_no_incluye is not None else ""
                 if val_no_incluye in ["", "NO", "FALSE", "0", "NULL", "NONE"]:
                     tiene_aux = "SI"
                 else:
                     tiene_aux = "NO"
-                
+
                 # Parsing numérico seguro
                 try:
                     salario_base = float(salario_base)
                 except:
                     salario_base = 1750905
-                    
+
                 try:
                     salario_especie = float(salario_especie)
                 except:
                     salario_especie = 0
-                    
+
                 try:
                     vlr_bono = float(vlr_bono)
                 except:
                     vlr_bono = 0
-                    
+
                 if str(con_bono).strip().upper() == "NO":
                     vlr_bono = 0
 
@@ -389,11 +501,13 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                     "VLR_BONO": vlr_bono,
                     "TIENE_AUX": str(tiene_aux).upper(),
                     "EPS": str(eps),
-                    "FONDO DE PENSIONES": str(fondo_pensiones)
+                    "FONDO DE PENSIONES": str(fondo_pensiones),
+                    "LINK_DRIVE": str(link_drive)
                 })
 
             if not empleados_limpios:
-                raise HTTPException(status_code=404, detail="No se encontraron empleados con IDs válidos.")
+                raise HTTPException(
+                    status_code=404, detail="No se encontraron empleados con IDs válidos.")
 
             # Paso 4: Respuesta limpia
             return {
@@ -401,17 +515,16 @@ async def obtener_empleados_por_empleador(id_contacto: str):
                 "empleador": nombre_empleador,
                 "data": empleados_limpios
             }
-            
+
     except httpx.HTTPStatusError as e:
         if id_contacto.upper() == 'EMP-001':
             return await _mock_fallback()
-        print(f"Error crítico HTTPStatusError en CRM: {str(e)}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error real: {str(e)} - Detalles: {e.response.text}")
+        raise HTTPException(
+            status_code=500, detail=f"Error real: {str(e)} - Detalles: {e.response.text}")
     except httpx.HTTPError as e:
         if id_contacto.upper() == 'EMP-001':
             return await _mock_fallback()
-        print(f"Error crítico HTTPError en CRM: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error real: {str(e)}")
     except HTTPException:
@@ -420,29 +533,161 @@ async def obtener_empleados_por_empleador(id_contacto: str):
             return await _mock_fallback()
         raise
     except Exception as e:
-        print(f"Error crítico inesperado en CRM: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error real: {str(e)}")
 
+
+class CierreNominaRequest(BaseModel):
+    periodo: str
+    quincena: Union[int, str]
+    id_aportante: Union[str, None] = None
+
+
+@app.get("/api/v1/nomina/estado-cierre/{periodo}/{quincena}")
+def obtener_estado_cierre(periodo: str, quincena: str, id_aportante: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    aportante_seguro = current_user.get("id_aportante")
+    if not aportante_seguro or str(aportante_seguro) == 'None':
+        aportante_seguro = id_aportante
+
+    if not aportante_seguro:
+        raise HTTPException(
+            status_code=400, detail="No se encontró un ID de aportante válido para la consulta.")
+
+    check = text(
+        "SELECT 1 FROM t_cierres_nomina WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena")
+    is_cerrado = db.execute(check, {"id_aportante": str(
+        aportante_seguro), "periodo": periodo, "quincena": quincena}).first() is not None
+    return {"cerrado": is_cerrado}
+
+
+@app.post("/api/v1/nomina/cerrar")
+def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    aportante_seguro = current_user.get("id_aportante")
+    if not aportante_seguro or str(aportante_seguro) == 'None':
+        aportante_seguro = payload.id_aportante
+
+    if not aportante_seguro:
+        raise HTTPException(
+            status_code=400, detail="No se encontró un ID de aportante válido para el cierre.")
+
+    id_aportante_str = str(aportante_seguro)
+    email = current_user.get("email", "desconocido")
+
+    check = text(
+        "SELECT 1 FROM t_cierres_nomina WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena")
+    quincena_str = str(payload.quincena).strip()
+
+    if db.execute(check, {"id_aportante": id_aportante_str, "periodo": payload.periodo, "quincena": quincena_str}).first():
+        raise HTTPException(
+            status_code=400, detail="La nómina ya está cerrada.")
+
+    try:
+        insert = text("""
+            INSERT INTO t_cierres_nomina (id_aportante, periodo_liq, quincena_pago, cerrado_por)
+            VALUES (:id_aportante, :periodo, :quincena, :email)
+        """)
+        db.execute(insert, {"id_aportante": id_aportante_str,
+                   "periodo": payload.periodo, "quincena": quincena_str, "email": email})
+        db.commit()
+        return {"status": "success", "message": "Nómina cerrada exitosamente."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/nomina/resumen/{periodo}/{quincena}")
+async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    aportante_seguro = current_user.get("id_aportante")
+    if not aportante_seguro or str(aportante_seguro) == 'None':
+        aportante_seguro = id_aportante
+
+    if not aportante_seguro:
+        raise HTTPException(
+            status_code=400, detail="No se encontró un ID de aportante válido para la consulta.")
+
+    id_aportante_str = str(aportante_seguro)
+
+    query = text("""
+        SELECT 
+            e.id_contrato, e.nombre_empleado, e.cargo, e.tipo_contrato,
+            n.neto_pagar, n.total_devengado, n.total_deducido
+        FROM m_empleados e
+        LEFT JOIN t_novedades n 
+            ON e.id_contrato = n.id_contrato 
+            AND n.periodo_liq = :periodo 
+            AND n.quincena_pago = :quincena
+        WHERE e.id_aportante = :id_aportante
+          AND UPPER(e.estado_empleado) = 'ACTIVO'
+    """)
+    resultado = db.execute(query, {"periodo": periodo, "quincena": quincena,
+                           "id_aportante": id_aportante_str}).mappings().all()
+
+    if not resultado:
+        raise HTTPException(
+            status_code=404, detail="No se encontraron empleados activos.")
+
+    resumen_empleados = []
+    total_empresa_devengado = 0.0
+    total_empresa_deducido = 0.0
+    total_empresa_neto = 0.0
+
+    for row in resultado:
+        if row["neto_pagar"] is not None:
+            estado = "LIQUIDADO"
+            neto = float(row["neto_pagar"] or 0)
+            devengado = float(row["total_devengado"] or 0)
+            deducido = float(row["total_deducido"] or 0)
+
+            total_empresa_devengado += devengado
+            total_empresa_deducido += deducido
+            total_empresa_neto += neto
+        else:
+            estado = "PENDIENTE"
+            neto = 0.0
+
+        resumen_empleados.append({
+            "id_contrato": row["id_contrato"],
+            "nombre": row["nombre_empleado"] or "Sin Nombre",
+            "cargo": row["cargo"] or "",
+            "tipo_contrato": row["tipo_contrato"] or "",
+            "estado": estado,
+            "neto_pagar": neto
+        })
+
+    return {
+        "status": "success",
+        "totales": {
+            "total_empresa_devengado": total_empresa_devengado,
+            "total_empresa_deducido": total_empresa_deducido,
+            "total_empresa_neto": total_empresa_neto,
+            "total_empleados": len(resultado),
+            "empleados_pendientes": sum(1 for e in resumen_empleados if e["estado"] == "PENDIENTE")
+        },
+        "empleados": resumen_empleados
+    }
+
+
 @app.post("/api/v1/liquidar")
-def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...)):
+def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dict = Depends(get_current_user)):
     if not payload:
         return []
-        
+
     for item in payload:
         periodo = str(item.get("PERIODO_PAGO", "QUINCENAL")).strip().upper()
         try:
             dias = float(item.get("DIAS_LABORADOS", 0) or 0)
         except ValueError:
             dias = 0
-            
+
         if periodo == "QUINCENAL" and dias > 15:
-            raise HTTPException(status_code=400, detail="Error de validación: Un contrato quincenal no puede superar los 15 días laborados.")
+            raise HTTPException(
+                status_code=400, detail="Error de validación: Un contrato quincenal no puede superar los 15 días laborados.")
         elif periodo == "MENSUAL" and dias > 30:
-            raise HTTPException(status_code=400, detail="Error de validación: Un contrato mensual no puede superar los 30 días laborados.")
-    
+            raise HTTPException(
+                status_code=400, detail="Error de validación: Un contrato mensual no puede superar los 30 días laborados.")
+
     df_final = pd.DataFrame(payload)
-    
+
     # --- 3. PARÁMETROS 2026 ---
     SMLV_2026 = 1750905
     SMLD_2026 = SMLV_2026 / 30
@@ -451,11 +696,12 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...)):
     LIMITE_AUX = SMLV_2026 * 2
     HR_MES = 210
     PORCENTAJE_LEY = 0.04
-    
-    FACTORES = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05, 'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
-    
+
+    FACTORES = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
+                'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
+
     df_final.columns = df_final.columns.str.strip().str.upper()
-    
+
     # --- ASEGURAR COLUMNAS REQUERIDAS ---
     columnas_defaults = {
         'ES_SMLV': '',
@@ -479,78 +725,111 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...)):
     for col, val in columnas_defaults.items():
         if col not in df_final.columns:
             df_final[col] = val
-    
+
     # --- 4. NORMALIZACIÓN NUMÉRICA ---
-    cols_limpiar = ['SALARIO_BASE', 'VLR_BONO', 'PRESTAMOS', 'SALARIO_ESPECIE', 'PRIMA_CALC']
+    cols_limpiar = ['SALARIO_BASE', 'VLR_BONO',
+                    'PRESTAMOS', 'SALARIO_ESPECIE', 'PRIMA_CALC']
     for col in cols_limpiar:
-        df_final[col] = df_final[col].astype(str).str.replace(r'[\$,.]', '', regex=True)
-            
-    cols_num = cols_limpiar + ['DIAS_LABORADOS', 'HORAS_LABORADAS', 'DIAS_VACACIONES', 'DIAS_INCAPACIDAD'] + list(FACTORES.keys())
+        def limpiar_valor(x):
+            if pd.isnull(x):
+                return 0.0
+            if isinstance(x, (int, float)):
+                return float(x)
+            s = str(x).strip().replace('$', '')
+            # Si el valor original desde Supabase trae .0 o .00 (ej. 80000.00), lo tratamos como float directo
+            if '.' in s and s.rsplit('.', 1)[1].isdigit() and len(s.rsplit('.', 1)[1]) <= 2 and ',' not in s:
+                try:
+                    return float(s)
+                except:
+                    pass
+            # Limpieza para inputs de frontend como "80.000" (miles)
+            s = s.replace('.', '').replace(',', '')
+            try:
+                return float(s)
+            except:
+                return 0.0
+
+        df_final[col] = df_final[col].apply(limpiar_valor)
+
+    cols_num = cols_limpiar + ['DIAS_LABORADOS', 'HORAS_LABORADAS',
+                               'DIAS_VACACIONES', 'DIAS_INCAPACIDAD'] + list(FACTORES.keys())
     cols_existentes = [col for col in cols_num if col in df_final.columns]
-    df_final[cols_existentes] = df_final[cols_existentes].apply(pd.to_numeric, errors='coerce').fillna(0)
-    
+    df_final[cols_existentes] = df_final[cols_existentes].apply(
+        pd.to_numeric, errors='coerce').fillna(0)
+
     # --- 5. & 6. LIQUIDACIÓN VECTORIZADA DE NÓMINA ---
     # A. Booleanos, Variables Base y ESTADO
-    es_smlv = df_final['ES_SMLV'].astype(str).str.strip().str.upper().isin(['VERDADERO', 'TRUE', 'SI', '1'])
-    con_bono = df_final['CON_BONO'].astype(str).str.strip().str.upper().isin(['VERDADERO', 'TRUE', 'SI', '1'])
-    tiene_aux = df_final['TIENE_AUX'].astype(str).str.strip().str.upper().isin(['VERDADERO', 'TRUE', 'SI', 'SÍ', '1'])
-    tipo_contrato = df_final['TIPO_CONTRATO'].astype(str).str.strip().str.upper()
-    estado_empleado = df_final['ESTADO_EMPLEADO'].astype(str).str.strip().str.upper()
+    es_smlv = df_final['ES_SMLV'].astype(str).str.strip(
+    ).str.upper().isin(['VERDADERO', 'TRUE', 'SI', '1'])
+    con_bono = df_final['CON_BONO'].astype(str).str.strip(
+    ).str.upper().isin(['VERDADERO', 'TRUE', 'SI', '1'])
+    tiene_aux = df_final['TIENE_AUX'].astype(str).str.strip(
+    ).str.upper().isin(['VERDADERO', 'TRUE', 'SI', 'SÍ', '1'])
+    tipo_contrato = df_final['TIPO_CONTRATO'].astype(
+        str).str.strip().str.upper()
+    estado_empleado = df_final['ESTADO_EMPLEADO'].astype(
+        str).str.strip().str.upper()
     periodo_pago = df_final['PERIODO_PAGO'].astype(str).str.strip().str.upper()
-    
+
     # Distribución de Días
     d_vac = df_final['DIAS_VACACIONES']
     d_inc = df_final['DIAS_INCAPACIDAD']
-    d_lab_total = np.where(df_final['HORAS_LABORADAS'] > 0, df_final['HORAS_LABORADAS'] / 8, df_final['DIAS_LABORADOS'])
-    
+    d_lab_total = np.where(df_final['HORAS_LABORADAS'] > 0,
+                           df_final['HORAS_LABORADAS'] / 8, df_final['DIAS_LABORADOS'])
+
     dias_efectivos_trabajo = np.maximum(d_lab_total - d_vac - d_inc, 0)
-    
+
     sal_base_raw = df_final['SALARIO_BASE']
     sal_especie_raw = df_final['SALARIO_ESPECIE']
-    
+
     df_final['TOTAL_BASE_MENSUAL'] = np.where(
         tipo_contrato == "EMPLEADO INTERNO",
         sal_base_raw + sal_especie_raw,
         sal_base_raw
     )
-    
+
     sal_base_input = df_final['TOTAL_BASE_MENSUAL']
-    val_diario_propuesto = np.where(tipo_contrato == "TIEMPO PARCIAL", sal_base_input, sal_base_input / 30)
-    
+    val_diario_propuesto = np.where(
+        tipo_contrato == "TIEMPO PARCIAL", sal_base_input, sal_base_input / 30)
+
     val_diario_validado = np.where(
         (tipo_contrato == "TIEMPO PARCIAL") & (con_bono),
         np.maximum(val_diario_propuesto, PISO_TP_BONO),
         val_diario_propuesto
     )
-    
+
     sal_base_mensual_equiv = val_diario_validado * 30
-    
+
     # B. Estructura Salarial
     df_final['SAL_REF'] = np.where(es_smlv, SMLV_2026, sal_base_mensual_equiv)
     df_final['BONO_REF'] = np.where(con_bono, df_final['VLR_BONO'], 0)
-    
+
     # C. Devengados
     valor_dia_total = df_final['SAL_REF'] / 30
-    
-    df_final['VAL_DIA_ESPECIE'] = np.where(tipo_contrato == "EMPLEADO INTERNO", sal_especie_raw / 30, 0)
-    df_final['VAL_DIA_EFECTIVO'] = valor_dia_total - df_final['VAL_DIA_ESPECIE']
-    
-    df_final['SUELDO_EFECTIVO_PAGADO'] = df_final['VAL_DIA_EFECTIVO'] * dias_efectivos_trabajo
-    df_final['SALARIO_ESPECIE_MES'] = df_final['VAL_DIA_ESPECIE'] * dias_efectivos_trabajo
+
+    df_final['VAL_DIA_ESPECIE'] = np.where(
+        tipo_contrato == "EMPLEADO INTERNO", sal_especie_raw / 30, 0)
+    df_final['VAL_DIA_EFECTIVO'] = valor_dia_total - \
+        df_final['VAL_DIA_ESPECIE']
+
+    df_final['SUELDO_EFECTIVO_PAGADO'] = df_final['VAL_DIA_EFECTIVO'] * \
+        dias_efectivos_trabajo
+    df_final['SALARIO_ESPECIE_MES'] = df_final['VAL_DIA_ESPECIE'] * \
+        dias_efectivos_trabajo
     df_final['SUELDO_TRABAJADO'] = df_final['SUELDO_EFECTIVO_PAGADO']
-    
+
     # 2. Pago Vacaciones e Incapacidades
     df_final['VALOR_VACACIONES'] = valor_dia_total * d_vac
     pago_inc_diario = np.maximum(valor_dia_total * 0.6667, SMLD_2026)
     df_final['VALOR_INCAPACIDAD'] = pago_inc_diario * d_inc
-    
+
     # 4. Bonos y Extras
     df_final['VALOR_BONO'] = np.where(
         tipo_contrato == "TIEMPO PARCIAL",
         df_final['BONO_REF'] * d_lab_total,
         (df_final['BONO_REF'] / 30) * d_lab_total
     )
-    
+
     valor_hora = df_final['SAL_REF'] / HR_MES
     df_final['TOTAL_EXTRAS'] = 0
     for cod, factor in FACTORES.items():
@@ -560,58 +839,78 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...)):
             df_final['TOTAL_EXTRAS'] += df_final[vlr_col]
         else:
             df_final[vlr_col] = 0
-            
+
     # 5. Auxilio de Transporte
-    bono_mensual_tope = np.where(tipo_contrato == "TIEMPO PARCIAL", df_final['BONO_REF'] * 30, df_final['BONO_REF'])
-    cond_aux = tiene_aux & ((df_final['SAL_REF'] + bono_mensual_tope) <= LIMITE_AUX)
-    df_final['VAL_AUX_TTE'] = np.where(cond_aux, (AUX_TTE_MES / 30) * dias_efectivos_trabajo, 0)
-    
+    bono_mensual_tope = np.where(
+        tipo_contrato == "TIEMPO PARCIAL", df_final['BONO_REF'] * 30, df_final['BONO_REF'])
+    cond_aux = tiene_aux & (
+        (df_final['SAL_REF'] + bono_mensual_tope) <= LIMITE_AUX)
+    df_final['VAL_AUX_TTE'] = np.where(
+        cond_aux, (AUX_TTE_MES / 30) * dias_efectivos_trabajo, 0)
+
     ibc_tiempo_completo = np.maximum(
-        df_final['SUELDO_TRABAJADO'] + df_final['SALARIO_ESPECIE_MES'] + df_final['VALOR_VACACIONES'] + df_final['VALOR_INCAPACIDAD'] + df_final['TOTAL_EXTRAS'], 
+        df_final['SUELDO_TRABAJADO'] + df_final['SALARIO_ESPECIE_MES'] +
+        df_final['VALOR_VACACIONES'] +
+        df_final['VALOR_INCAPACIDAD'] + df_final['TOTAL_EXTRAS'],
         (SMLV_2026 / 30) * d_lab_total
     )
-    
-    dias_proyectados = np.where(periodo_pago == 'QUINCENAL', d_lab_total * 2, d_lab_total)
-    cond_parcial = [dias_proyectados <= 7, dias_proyectados <= 14, dias_proyectados <= 21, dias_proyectados > 21]
-    opciones_parcial_mes = [SMLV_2026 * 0.25, SMLV_2026 * 0.50, SMLV_2026 * 0.75, SMLV_2026]
-    
+
+    dias_proyectados = np.where(
+        periodo_pago == 'QUINCENAL', d_lab_total * 2, d_lab_total)
+    cond_parcial = [dias_proyectados <= 7, dias_proyectados <=
+                    14, dias_proyectados <= 21, dias_proyectados > 21]
+    opciones_parcial_mes = [SMLV_2026 * 0.25,
+                            SMLV_2026 * 0.50, SMLV_2026 * 0.75, SMLV_2026]
+
     ibc_parcial_proporcional = np.where(
         periodo_pago == 'QUINCENAL',
         np.select(cond_parcial, opciones_parcial_mes) / 2,
         np.select(cond_parcial, opciones_parcial_mes)
     )
-    
-    eps_exento = df_final.get('EPS', '').astype(str).str.strip().str.upper().str.contains('N/A', na=False)
-    fondo_pensiones_exento = df_final.get('FONDO_PENSIONES', '').astype(str).str.strip().str.upper().str.contains('N/A', na=False)
-    
-    cond_tiempo_parcial_rigido = (tipo_contrato == "TIEMPO PARCIAL") & (~eps_exento)
+
+    eps_exento = df_final.get('EPS', '').astype(
+        str).str.strip().str.upper().str.contains('N/A', na=False)
+    fondo_pensiones_exento = df_final.get('FONDO_PENSIONES', '').astype(
+        str).str.strip().str.upper().str.contains('N/A', na=False)
+
+    cond_tiempo_parcial_rigido = (
+        tipo_contrato == "TIEMPO PARCIAL") & (~eps_exento)
 
     # --- EXCEPCIÓN TIEMPO PARCIAL: IBC PILA ---
     # Los empleados de Tiempo Parcial que no están exentos de EPS cotizan sobre 1 SMLV completo.
     df_final['IBC_PILA'] = np.where(
         cond_tiempo_parcial_rigido,
         SMLV_2026,
-        np.where(tipo_contrato == "TIEMPO PARCIAL", ibc_parcial_proporcional + df_final['TOTAL_EXTRAS'], ibc_tiempo_completo)
+        np.where(tipo_contrato == "TIEMPO PARCIAL",
+                 ibc_parcial_proporcional, ibc_tiempo_completo)
     )
-    
+
     # --- CÁLCULO DE DEDUCCIONES ---
     # Salud y Pensión (4% cada uno)
-    df_final['SALUD_4'] = np.where(eps_exento, 0, df_final['IBC_PILA'] * PORCENTAJE_LEY)
-    df_final['PENSION_4'] = np.where(fondo_pensiones_exento, 0, df_final['IBC_PILA'] * PORCENTAJE_LEY)
-    
+    df_final['SALUD_4'] = np.where(
+        eps_exento, 0, df_final['IBC_PILA'] * PORCENTAJE_LEY)
+    df_final['PENSION_4'] = np.where(
+        fondo_pensiones_exento, 0, df_final['IBC_PILA'] * PORCENTAJE_LEY)
+
     # Fraccionamiento de Deducciones para Periodo Quincenal
     # Regla: Solo se fracciona para Tiempo Parcial que NO están exentos de EPS (IBC base de SMLV completo)
-    es_quincenal_fraccion = (periodo_pago == 'QUINCENAL') & (tipo_contrato == 'TIEMPO PARCIAL') & (~eps_exento)
-    df_final['SALUD_4'] = np.where(es_quincenal_fraccion, df_final['SALUD_4'] / 2.0, df_final['SALUD_4'])
-    df_final['PENSION_4'] = np.where(es_quincenal_fraccion, df_final['PENSION_4'] / 2.0, df_final['PENSION_4'])
-    
+    es_quincenal_fraccion = (periodo_pago == 'QUINCENAL') & (
+        tipo_contrato == 'TIEMPO PARCIAL') & (~eps_exento)
+    df_final['SALUD_4'] = np.where(
+        es_quincenal_fraccion, df_final['SALUD_4'] / 2.0, df_final['SALUD_4'])
+    df_final['PENSION_4'] = np.where(
+        es_quincenal_fraccion, df_final['PENSION_4'] / 2.0, df_final['PENSION_4'])
+
     # Redondeo PILA al múltiplo de 100 superior como paso final
-    df_final['SALUD_4'] = df_final['SALUD_4'].apply(lambda x: math.ceil(x / 100.0) * 100 if pd.notnull(x) and x > 0 else 0)
-    df_final['PENSION_4'] = df_final['PENSION_4'].apply(lambda x: math.ceil(x / 100.0) * 100 if pd.notnull(x) and x > 0 else 0)
-    
+    df_final['SALUD_4'] = df_final['SALUD_4'].apply(
+        lambda x: math.ceil(x / 100.0) * 100 if pd.notnull(x) and x > 0 else 0)
+    df_final['PENSION_4'] = df_final['PENSION_4'].apply(
+        lambda x: math.ceil(x / 100.0) * 100 if pd.notnull(x) and x > 0 else 0)
+
     # F. Totales Finales (Modificado para incluir PRIMA_CALC)
-    df_final['SUELDO_PAGADO'] = df_final['SUELDO_TRABAJADO'] + df_final['VALOR_VACACIONES'] + df_final['VALOR_INCAPACIDAD']
-    
+    df_final['SUELDO_PAGADO'] = df_final['SUELDO_TRABAJADO'] + \
+        df_final['VALOR_VACACIONES'] + df_final['VALOR_INCAPACIDAD']
+
     df_final['TOTAL_DEVENGADO'] = (
         df_final['SUELDO_PAGADO'] +
         df_final['SALARIO_ESPECIE_MES'] +
@@ -620,23 +919,25 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...)):
         df_final['VAL_AUX_TTE'] +
         df_final['PRIMA_CALC']
     )
-    
-    df_final['TOTAL_DEDUCIDO'] = df_final['SALUD_4'] + df_final['PENSION_4'] + df_final['PRESTAMOS']
-    df_final['NETO_PAGAR'] = df_final['TOTAL_DEVENGADO'] - df_final['TOTAL_DEDUCIDO'] - df_final['SALARIO_ESPECIE_MES']
-    
+
+    df_final['TOTAL_DEDUCIDO'] = df_final['SALUD_4'] + \
+        df_final['PENSION_4'] + df_final['PRESTAMOS']
+    df_final['NETO_PAGAR'] = df_final['TOTAL_DEVENGADO'] - \
+        df_final['TOTAL_DEDUCIDO'] - df_final['SALARIO_ESPECIE_MES']
+
     # --- 7. VALIDACIÓN DE ESTADO DEL EMPLEADO ---
     es_retirado = estado_empleado == 'RETIRADO'
-    
+
     cols_a_ceros = [
         'SUELDO_PAGADO', 'SUELDO_EFECTIVO_PAGADO', 'SALARIO_ESPECIE_MES',
         'VALOR_BONO', 'TOTAL_EXTRAS', 'VAL_AUX_TTE', 'PRESTAMOS', 'PRIMA_CALC',
         'IBC_PILA', 'SALUD_4', 'PENSION_4', 'TOTAL_DEVENGADO', 'TOTAL_DEDUCIDO', 'NETO_PAGAR',
-        'VALOR_VACACIONES', 'VALOR_INCAPACIDAD', 'VLR_HED', 'VLR_HEN', 'VLR_HEDF', 
+        'VALOR_VACACIONES', 'VALOR_INCAPACIDAD', 'VLR_HED', 'VLR_HEN', 'VLR_HEDF',
         'VLR_HENF', 'VLR_RN', 'VLR_RDN', 'VLR_RNF'
     ]
     for col in cols_a_ceros:
         df_final[col] = np.where(es_retirado, 0, df_final[col])
-        
+
     cols_monetarias = [
         'TOTAL_BASE_MENSUAL', 'SAL_REF', 'BONO_REF', 'VAL_DIA_ESPECIE', 'VAL_DIA_EFECTIVO',
         'SUELDO_EFECTIVO_PAGADO', 'SALARIO_ESPECIE_MES', 'SUELDO_TRABAJADO',
@@ -648,20 +949,109 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...)):
     for col in cols_monetarias:
         if col in df_final.columns:
             df_final[col] = df_final[col].round(0).fillna(0).astype(int)
-        
+
     # Reemplazar NaN e infinitos por None para evitar problemas de serialización JSON en FastAPI
     df_final = df_final.replace([np.nan, np.inf, -np.inf], None)
-    
+
     return df_final.to_dict(orient="records")
+
+
+@app.get("/api/v1/nomina/desprendible-pdf/{id_contrato}/{periodo_liq}/{quincena_pago}")
+def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago: str, db: Session = Depends(get_db)):
+    query = text("""
+        SELECT e.*, n.*, 
+               n.salario_base as salario_base_novedad,
+               n.vlr_bono as vlr_bono_novedad,
+               n.sal_especie as sal_especie_novedad,
+               n.prestamos as prestamos_novedad,
+               a.razon_social as razon_social,
+               a.tipo_documento as tipo_documento,
+               a.id_aportante as id_aportante
+        FROM m_empleados e
+        JOIN t_novedades n ON e.id_contrato = n.id_contrato
+        LEFT JOIN m_aportantes a ON e.id_aportante = a.id_aportante
+        WHERE e.id_contrato = :id_contrato
+          AND n.periodo_liq = :periodo
+          AND n.quincena_pago = :quincena
+    """)
+    row = db.execute(query, {"id_contrato": id_contrato,
+                     "periodo": periodo_liq, "quincena": quincena_pago}).mappings().first()
+
+    if not row:
+        raise HTTPException(
+            status_code=404, detail="Liquidación no encontrada para este contrato y periodo.")
+
+    row_dict = {k.upper(): v for k, v in dict(row).items()}
+
+    # Priorizar variables variables congeladas en la novedad sobre las del CRM (m_empleados)
+    if 'SALARIO_BASE_NOVEDAD' in row_dict and row_dict['SALARIO_BASE_NOVEDAD'] is not None:
+        salario_base_raw = row_dict.get('SALARIO_BASE_NOVEDAD', 0)
+        try:
+            row_dict['SALARIO_BASE'] = float(
+                salario_base_raw) if salario_base_raw is not None else 0.0
+        except ValueError:
+            row_dict['SALARIO_BASE'] = 0.0
+
+    if 'VLR_BONO_NOVEDAD' in row_dict and row_dict['VLR_BONO_NOVEDAD'] is not None:
+        bono_raw = row_dict.get('VLR_BONO_NOVEDAD', 0)
+        try:
+            row_dict['VLR_BONO'] = float(
+                bono_raw) if bono_raw is not None else 0.0
+        except ValueError:
+            row_dict['VLR_BONO'] = 0.0
+
+    if 'SAL_ESPECIE_NOVEDAD' in row_dict and row_dict['SAL_ESPECIE_NOVEDAD'] is not None:
+        especie_raw = row_dict.get('SAL_ESPECIE_NOVEDAD', 0)
+        try:
+            row_dict['SALARIO_ESPECIE'] = float(
+                especie_raw) if especie_raw is not None else 0.0
+        except ValueError:
+            row_dict['SALARIO_ESPECIE'] = 0.0
+
+    if 'PRESTAMOS_NOVEDAD' in row_dict and row_dict['PRESTAMOS_NOVEDAD'] is not None:
+        prestamo_raw = row_dict.get('PRESTAMOS_NOVEDAD', 0)
+        try:
+            row_dict['PRESTAMOS'] = float(
+                prestamo_raw) if prestamo_raw is not None else 0.0
+        except ValueError:
+            row_dict['PRESTAMOS'] = 0.0
+
+    try:
+        # Re-liquidamos en vuelo para recuperar los campos detallados que no se guardan explícitamente en BD
+        resultado_liquidado = liquidar_nomina([row_dict], {})
+        if resultado_liquidado:
+            resultado_final = resultado_liquidado[0]
+            # Mezclar metadatos necesarios
+            resultado_final['RAZON_SOCIAL'] = row_dict.get(
+                'RAZON_SOCIAL', 'SIN EMPRESA')
+            resultado_final['TIPO_DOCUMENTO'] = row_dict.get(
+                'TIPO_DOCUMENTO', 'NIT')
+            resultado_final['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
+            resultado_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
+            resultado_final['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
+            resultado_final['OBSERVACIONES'] = row_dict.get('OBSERVACIONES')
+
+            return generar_comprobante(resultado_final)
+    except Exception as e:
+        pass
+        # Fallback si falla liquidar_nomina, aseguramos SAL_REF para evitar error en divisor
+    if not row_dict.get('SAL_REF'):
+        row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in [
+            'SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
+    return generar_comprobante(row_dict)
+
 
 @app.post("/api/v1/comprobante/generar")
 def generar_comprobante(row: Dict[str, Any] = Body(...)):
     HR_MES = 210
-    factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05, 'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
+    factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
+                     'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
 
     periodo_liq = formatear_periodo(row.get('PERIODO_LIQ', 'SIN PERIODO'))
     quincena_pago = str(row.get('QUINCENA_PAGO', '')).strip().upper()
-    
+
+    id_aportante = str(row.get('ID_APORTANTE', '')).strip()
+
     if quincena_pago in ['1', 'Q1']:
         texto_periodo = f"Primera Quincena de {periodo_liq}"
     elif quincena_pago in ['2', 'Q2']:
@@ -688,13 +1078,15 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     # --- BLOQUE INFORMACIÓN EMPLEADO ---
     pdf.set_fill_color(245, 245, 245)
     pdf.set_font('helvetica', 'B', 10)
-    pdf.cell(0, 7, f"INFORMACIÓN DEL TRABAJADOR", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 7, f"INFORMACIÓN DEL TRABAJADOR",
+             fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_font('helvetica', '', 10)
     pdf.ln(2)
     pdf.cell(95, 6, f"Nombre: {row.get('NOMBRE_EMPLEADO', '')}")
     pdf.cell(60, 6, f"Tipo Contrato: {row.get('TIPO_CONTRATO', '')}")
-    pdf.cell(50, 6, f"Tipo ID: {row.get('T_ID_EMPLEADO', '')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(50, 6, f"Tipo ID: {row.get('T_ID_EMPLEADO', '')}",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.cell(95, 6, f"Cargo: {row.get('CARGO', 'NO ASIGNADO')}")
     total_dias = forzar_numero(row.get('DIAS_LABORADOS', 0))
@@ -708,7 +1100,8 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(100, 8, "DETALLE DE CONCEPTO", border=1, align='C', fill=True)
     pdf.cell(45, 8, "DEVENGADO", border=1, align='C', fill=True)
-    pdf.cell(45, 8, "DEDUCIDO", border=1, align='C', fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(45, 8, "DEDUCIDO", border=1, align='C',
+             fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_font('helvetica', '', 10)
 
@@ -717,7 +1110,8 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     d_inc = forzar_numero(row.get('DIAS_INCAPACIDAD', 0))
     d_trab = np.maximum(total_dias - d_vac - d_inc, 0)
 
-    label_sueldo = "Sueldo Efectivo" if forzar_numero(row.get('SAL_ESPECIE_PAGADO', 0)) > 0 else "Sueldo por Días Trabajados"
+    label_sueldo = "Sueldo Efectivo" if forzar_numero(
+        row.get('SAL_ESPECIE_PAGADO', 0)) > 0 else "Sueldo por Días Trabajados"
 
     val_vacaciones = float(row.get('VALOR_VACACIONES', 0) or 0)
     dias_vac = float(row.get('DIAS_VACACIONES', 0) or 0)
@@ -728,15 +1122,17 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
         (f"{label_sueldo} ({d_trab:.0f} días)", 'SUELDO_EFECTIVO_PAGADO'),
         (f"Salario en Especie ({d_trab:.0f} días)", 'SALARIO_ESPECIE_MES')
     ]
-    
+
     if val_vacaciones > 0:
-        conceptos_fijos.append((f"Vacaciones ({dias_vac:.0f} días)", 'VALOR_VACACIONES'))
-        
+        conceptos_fijos.append(
+            (f"Vacaciones ({dias_vac:.0f} días)", 'VALOR_VACACIONES'))
+
     if val_incapacidad > 0:
-        conceptos_fijos.append((f"Incapacidades ({dias_inc:.0f} días)", 'VALOR_INCAPACIDAD'))
-        
+        conceptos_fijos.append(
+            (f"Incapacidades ({dias_inc:.0f} días)", 'VALOR_INCAPACIDAD'))
+
     conceptos_fijos.extend([
-        ("Bono No Salarial", 'BONO_PAGADO'),
+        ("Bono No Salarial", 'VALOR_BONO'),
         ("Auxilio de Transporte", 'VAL_AUX_TTE'),
         ("Prima de Servicios", 'PRIMA_CALC')
     ])
@@ -746,16 +1142,19 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
         if val > 0:
             pdf.cell(100, 7, desc, border='LR')
             pdf.cell(45, 7, f"{val:,.0f}", border='LR', align='R')
-            pdf.cell(45, 7, "0", border='LR', align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.cell(45, 7, "0", border='LR', align='R',
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # 2. DETALLE DE EXTRAS
     for cod, factor in factores_dict.items():
         cant = forzar_numero(row.get(cod, 0))
         if cant > 0:
             monto = float(cant * v_hora_fila * factor)
-            pdf.cell(100, 7, f"{NOMBRES_EXTRAS.get(cod, cod)} ({cant} Hr)", border='LR')
+            pdf.cell(
+                100, 7, f"{NOMBRES_EXTRAS.get(cod, cod)} ({cant} Hr)", border='LR')
             pdf.cell(45, 7, f"{monto:,.0f}", border='LR', align='R')
-            pdf.cell(45, 7, "0", border='LR', align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.cell(45, 7, "0", border='LR', align='R',
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # --- 3. DEDUCCIONES ---
     deducciones = [
@@ -770,7 +1169,8 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
         if val > 0:
             pdf.cell(100, 7, desc, border='LR')
             pdf.cell(45, 7, "0", border='LR', align='R')
-            pdf.cell(45, 7, f"{val:,.0f}", border='LR', align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.cell(45, 7, f"{val:,.0f}", border='LR',
+                     align='R', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # LÍNEA FINAL DE LA TABLA
     pdf.cell(190, 0, "", border='T', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -778,15 +1178,18 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     # TOTALES
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(100, 8, "TOTALES", border=1, align='R', fill=True)
-    pdf.cell(45, 8, f"{forzar_numero(row.get('TOTAL_DEVENGADO', 0)):,.0f}", border=1, align='R', fill=True)
-    pdf.cell(45, 8, f"{forzar_numero(row.get('TOTAL_DEDUCIDO', 0)):,.0f}", border=1, align='R', fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(45, 8, f"{forzar_numero(row.get('TOTAL_DEVENGADO', 0)):,.0f}",
+             border=1, align='R', fill=True)
+    pdf.cell(45, 8, f"{forzar_numero(row.get('TOTAL_DEDUCIDO', 0)):,.0f}",
+             border=1, align='R', fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # NETO A PAGAR
     pdf.ln(4)
     pdf.set_font('helvetica', 'B', 12)
     pdf.cell(145, 10, "NETO A PAGAR:", align='R')
     pdf.set_text_color(0, 50, 150)
-    pdf.cell(45, 10, f"${forzar_numero(row.get('NETO_PAGAR', 0)):,.0f}", border=1, align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(45, 10, f"${forzar_numero(row.get('NETO_PAGAR', 0)):,.0f}",
+             border=1, align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_text_color(0, 0, 0)
 
     # --- OBSERVACIONES ---
@@ -806,59 +1209,85 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     pdf.ln(1)
     pdf.set_font('helvetica', '', 8)
     pdf.cell(95, 3, "Firma del Trabajador", align='C')
-    pdf.cell(95, 3, "Firma Autorizada", align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(95, 3, "Firma Autorizada", align='C',
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.cell(95, 3, "(Recibí Conforme)", align='C')
-    pdf.cell(95, 3, "Empleador / Sello", align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(95, 3, "Empleador / Sello", align='C',
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # --- NOTAS PIE DE PÁGINA ---
     pdf.ln(10)
     pdf.set_font('helvetica', 'I', 8)
     pdf.set_text_color(100, 100, 100)
     ibc_val = forzar_numero(row.get('IBC_PILA', 0))
-    pdf.cell(0, 4, f"* Base de Cotización (IBC): ${ibc_val:,.0f}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.cell(0, 4, f"Estado: {row.get('OBSERVACIONES','LIQUIDADO')} | Generado por Nómina Cloud API.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.cell(0, 4, f"* Base de Cotización (IBC): ${ibc_val:,.0f}",
+             align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.ln(3)
+    pdf.cell(0, 4, "Generado por UNIFIKA Nómina Cloud.",
+             align='C', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.set_text_color(0, 0, 255)
+    pdf.cell(0, 4, "https://unifika.co", align='C',
+             link="https://unifika.co", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(0, 0, 0)
 
     pdf_bytes = bytes(pdf.output())
-    
+
     id_contrato = row.get('ID_CONTRATO', 'SIN_CONTRATO')
     periodo_liq_raw = row.get('PERIODO_LIQ', 'SIN_PERIODO')
     quincena_pago_raw = row.get('QUINCENA_PAGO', '')
-    
+
     periodo_seguro = str(periodo_liq_raw).replace(" ", "_").upper()
     quincena_segura = str(quincena_pago_raw).replace(" ", "_").upper()
-    
+
     if quincena_segura:
         nombre_archivo = f"Desprendible_{id_contrato}_{periodo_seguro}_{quincena_segura}.pdf"
     else:
         nombre_archivo = f"Desprendible_{id_contrato}_{periodo_seguro}.pdf"
-    
+
     return Response(
-        content=pdf_bytes, 
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={'Content-Disposition': f'attachment; filename={nombre_archivo}'}
     )
 
+
 @app.post("/api/v1/historico/guardar")
-def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Body(...), db: Session = Depends(get_db)):
+def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Body(...), db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     if not payload:
         return {"status": "success", "message": "No hay datos para guardar."}
-        
+
     if isinstance(payload, dict):
         payload = [payload]
-        
+
     df_entrada = pd.DataFrame(payload)
     df_entrada.columns = df_entrada.columns.str.strip().str.upper()
-    
+
     # 1. Asegurar columnas de periodo y quincena
     if 'PERIODO_LIQ' not in df_entrada.columns or 'QUINCENA_PAGO' not in df_entrada.columns:
         return {"status": "error", "message": "El payload debe contener las claves 'PERIODO_LIQ' y 'QUINCENA_PAGO'."}
-        
+
+    id_aportante = str(current_user.get("id_aportante"))
+    periodo_check = str(df_entrada.iloc[0]['PERIODO_LIQ']).strip()
+    quincena_check = str(df_entrada.iloc[0]['QUINCENA_PAGO']).strip()
+
+    check_cierre_query = text("""
+        SELECT 1 FROM t_cierres_nomina
+        WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena
+    """)
+    if db.execute(check_cierre_query, {"id_aportante": id_aportante, "periodo": periodo_check, "quincena": quincena_check}).first():
+        raise HTTPException(
+            status_code=400, detail="La nómina de este periodo se encuentra en estado CERRADO y sus datos no pueden ser alterados. Por favor, comuníquese con la línea de atención.")
+
     # 2. Limpieza de entrada: Solo registros únicos por contrato
     if 'ID_CONTRATO' not in df_entrada.columns:
         return {"status": "error", "message": "El payload debe contener 'ID_CONTRATO'."}
-        
-    df_entrada = df_entrada.drop_duplicates(subset=['ID_CONTRATO'], keep='last')
-    
+
+    df_entrada = df_entrada.drop_duplicates(
+        subset=['ID_CONTRATO'], keep='last')
+
     # 3. Preparar la inserción / actualización en cascada (Aportante -> Empleado -> Novedades)
     upsert_aportante_query = text("""
         INSERT INTO m_aportantes (id_aportante, razon_social, tipo_documento, tipo_empleador, telefono, email)
@@ -876,12 +1305,12 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado,
             cargo, tipo_contrato, estado_empleado, periodo_pago, salario_base,
             vlr_bono, sal_especie, eps, afp, es_smlv, con_bono, tiene_aux,
-            nombre_1, nombre_2, apellido_1, apellido_2, departamento, municipio, riesgo_arl, ccf, arl
+            nombre_1, nombre_2, apellido_1, apellido_2, departamento, municipio, riesgo_arl, ccf, arl, link_drive
         ) VALUES (
             :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
             :cargo, :tipo_contrato, :estado_empleado, :periodo_pago, :salario_base,
             :vlr_bono, :sal_especie, :eps, :afp, :es_smlv, :con_bono, :tiene_aux,
-            :nombre_1, :nombre_2, :apellido_1, :apellido_2, :departamento, :municipio, :riesgo_arl, :ccf, :arl
+            :nombre_1, :nombre_2, :apellido_1, :apellido_2, :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
         ) ON CONFLICT (id_contrato) DO UPDATE SET
             id_aportante = EXCLUDED.id_aportante,
             id_empleado = EXCLUDED.id_empleado,
@@ -907,24 +1336,28 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             municipio = EXCLUDED.municipio,
             riesgo_arl = EXCLUDED.riesgo_arl,
             ccf = EXCLUDED.ccf,
-            arl = EXCLUDED.arl;
+            arl = EXCLUDED.arl,
+            link_drive = EXCLUDED.link_drive;
     """)
 
     upsert_query = text("""
         INSERT INTO t_novedades (
-            id_contrato, periodo_liq, quincena_pago, generar_nomina, 
+            id_contrato, periodo_liq, quincena_pago, generar_nomina, salario_base,
             dias_laborados, horas_laboradas, dias_vacaciones, dias_incapacidad,
             prestamos, prima_calc, hed, hen, hedf, henf, rn, rdn, rnf, observaciones,
-            ibc_pila, salud_4, pension_4, total_devengado, total_deducido, neto_pagar
+            ibc_pila, salud_4, pension_4, total_devengado, total_deducido, neto_pagar,
+            vlr_bono, sal_especie
         ) VALUES (
-            :id_contrato, :periodo_liq, :quincena_pago, :generar_nomina,
+            :id_contrato, :periodo_liq, :quincena_pago, :generar_nomina, :salario_base,
             :dias_laborados, :horas_laboradas, :dias_vacaciones, :dias_incapacidad,
             :prestamos, :prima_calc, :hed, :hen, :hedf, :henf, :rn, :rdn, :rnf, :observaciones,
-            :ibc_pila, :salud_4, :pension_4, :total_devengado, :total_deducido, :neto_pagar
+            :ibc_pila, :salud_4, :pension_4, :total_devengado, :total_deducido, :neto_pagar,
+            :vlr_bono, :sal_especie
         )
         ON CONFLICT (id_contrato, periodo_liq, quincena_pago)
         DO UPDATE SET
             generar_nomina = EXCLUDED.generar_nomina,
+            salario_base = EXCLUDED.salario_base,
             dias_laborados = EXCLUDED.dias_laborados,
             horas_laboradas = EXCLUDED.horas_laboradas,
             dias_vacaciones = EXCLUDED.dias_vacaciones,
@@ -945,15 +1378,25 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             total_devengado = EXCLUDED.total_devengado,
             total_deducido = EXCLUDED.total_deducido,
             neto_pagar = EXCLUDED.neto_pagar,
+            vlr_bono = EXCLUDED.vlr_bono,
+            sal_especie = EXCLUDED.sal_especie,
             created_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota';
     """)
-    
+
     records_saved = 0
     try:
         for _, row in df_entrada.iterrows():
             # Params para aportante
+            # Si es SuperAdmin (None), toma el ID del payload. Si es Empleador, usa el de la sesión.
+            id_aportante_seguro = current_user.get("id_aportante")
+            if not id_aportante_seguro:
+                id_aportante_seguro = str(row.get('ID_APORTANTE', '')).strip()
+
+            if not id_aportante_seguro:
+                raise HTTPException(
+                    status_code=400, detail="No se encontró un ID de aportante válido para guardar el registro.")
             params_aportante = {
-                "id_aportante": str(row.get('ID_APORTANTE', '')).strip(),
+                "id_aportante": id_aportante_seguro,
                 "razon_social": str(row.get('RAZON_SOCIAL', '')).strip(),
                 "tipo_documento": str(row.get('TIPO_DOCUMENTO', '')).strip(),
                 "tipo_empleador": str(row.get('TIPO_EMPLEADOR', '')).strip(),
@@ -962,13 +1405,16 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             }
 
             # Params para empleado
-            es_smlv_bool = str(row.get('ES_SMLV', '')).strip().upper() in ['SI', 'TRUE', '1']
-            con_bono_bool = str(row.get('CON_BONO', '')).strip().upper() in ['SI', 'TRUE', '1']
-            tiene_aux_bool = str(row.get('TIENE_AUX', '')).strip().upper() in ['SI', 'TRUE', '1']
+            es_smlv_bool = str(row.get('ES_SMLV', '')).strip().upper() in [
+                'SI', 'TRUE', '1']
+            con_bono_bool = str(row.get('CON_BONO', '')).strip().upper() in [
+                'SI', 'TRUE', '1']
+            tiene_aux_bool = str(row.get('TIENE_AUX', '')).strip().upper() in [
+                'SI', 'TRUE', '1']
 
             params_empleado = {
                 "id_contrato": str(row.get('ID_CONTRATO')).strip(),
-                "id_aportante": str(row.get('ID_APORTANTE', '')).strip(),
+                "id_aportante": id_aportante_seguro,
                 "id_empleado": str(row.get('ID_EMPLEADO', '')).strip(),
                 "t_id_empleado": str(row.get('T_ID_EMPLEADO', '')).strip(),
                 "nombre_empleado": str(row.get('NOMBRE_EMPLEADO', '')).strip(),
@@ -992,7 +1438,8 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "municipio": str(row.get('MUNICIPIO', '')).strip(),
                 "riesgo_arl": str(row.get('RIESGO_ARL', '')).strip(),
                 "ccf": str(row.get('CCF', '')).strip(),
-                "arl": str(row.get('NOMBRE_ARL', '')).strip()
+                "arl": str(row.get('NOMBRE_ARL', '')).strip(),
+                "link_drive": str(row.get('LINK_DRIVE', '')).strip()
             }
 
             # Params para novedad
@@ -1001,6 +1448,7 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "periodo_liq": str(row.get('PERIODO_LIQ')).strip(),
                 "quincena_pago": str(row.get('QUINCENA_PAGO', '1')).strip(),
                 "generar_nomina": True,
+                "salario_base": forzar_numero(row.get('SALARIO_BASE', 0)),
                 "dias_laborados": forzar_numero(row.get('DIAS_LABORADOS', 0)),
                 "horas_laboradas": forzar_numero(row.get('HORAS_LABORADAS', 0)),
                 "dias_vacaciones": forzar_numero(row.get('DIAS_VACACIONES', 0)),
@@ -1020,20 +1468,116 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "pension_4": forzar_numero(row.get('PENSION_4', 0)),
                 "total_devengado": forzar_numero(row.get('TOTAL_DEVENGADO', 0)),
                 "total_deducido": forzar_numero(row.get('TOTAL_DEDUCIDO', 0)),
-                "neto_pagar": forzar_numero(row.get('NETO_PAGAR', 0))
+                "neto_pagar": forzar_numero(row.get('NETO_PAGAR', 0)),
+                "vlr_bono": forzar_numero(row.get('VLR_BONO', 0)),
+                "sal_especie": forzar_numero(row.get('SALARIO_ESPECIE', 0))
             }
-            
+
             db.execute(upsert_aportante_query, params_aportante)
             db.execute(upsert_empleado_query, params_empleado)
             db.execute(upsert_query, params)
             records_saved += 1
-            
+
         db.commit()
         return {
-            "status": "success", 
+            "status": "success",
             "message": "Nómina guardada exitosamente en la base de datos.",
             "registros_procesados": records_saved
         }
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": f"Error al guardar histórico: {str(e)}"}
+
+
+@app.get("/api/v1/nomina/periodos-historico")
+def obtener_historico(aportante_id: str = None, current_user: dict = Depends(get_current_user)):
+    try:
+        id_aportante_final = aportante_id or current_user.get("id_aportante")
+
+        if not id_aportante_final or str(id_aportante_final) == 'None':
+            raise ValueError(
+                "No se detectó un id_aportante para consultar. Si eres SuperAdmin, debes seleccionar una empresa primero.")
+
+        # 1. Traer los periodos que ya están cerrados (Esta tabla SÍ tiene id_aportante)
+        cierres_res = supabase_client.table('t_cierres_nomina').select(
+            'periodo_liq, quincena_pago').eq('id_aportante', id_aportante_final).execute()
+        cierres_data = cierres_res.data if cierres_res.data else []
+        cierres_set = {
+            f"{c['periodo_liq']}-{c['quincena_pago']}" for c in cierres_data}
+
+        # 2. Consultar m_empleados para obtener los contratos de esta empresa
+        empleados_res = supabase_client.table('m_empleados').select(
+            'id_contrato, nombre_empleado, cargo').eq('id_aportante', id_aportante_final).execute()
+        empleados_data = empleados_res.data if empleados_res.data else []
+        contratos = [emp['id_contrato'] for emp in empleados_data]
+        empleados_dict = {emp['id_contrato']: emp for emp in empleados_data}
+
+        # Si la empresa no tiene empleados, devolvemos lista vacía inmediatamente
+        if not contratos:
+            return []
+
+        # 3. Traer la actividad de t_novedades filtrando por la lista de contratos
+        novedades_res = supabase_client.table('t_novedades').select(
+            'periodo_liq, quincena_pago, id_contrato').in_('id_contrato', contratos).execute()
+        novedades_data = novedades_res.data if novedades_res.data else []
+
+        # 4. Agrupar periodos únicos y asignar estado
+        periodos_unicos = {}
+        for nov in novedades_data:
+            key = f"{nov['periodo_liq']}-{nov['quincena_pago']}"
+            if key not in periodos_unicos:
+                estado_actual = "CERRADO" if key in cierres_set else "ABIERTO"
+                periodos_unicos[key] = {
+                    "periodo_liq": nov['periodo_liq'],
+                    "quincena_pago": nov['quincena_pago'],
+                    "estado": estado_actual,
+                    "empleados": []
+                }
+
+            id_c = nov.get("id_contrato")
+            emp_info = empleados_dict.get(id_c, {})
+            periodos_unicos[key]["empleados"].append({
+                "id_contrato": id_c,
+                "nombre_empleado": emp_info.get("nombre_empleado", "EMPLEADO DESCONOCIDO"),
+                "cargo": emp_info.get("cargo", "N/A")
+            })
+
+        # Diccionario helper para ordenar meses cronológicamente
+        MESES_MAP = {
+            "ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4,
+            "MAYO": 5, "JUNIO": 6, "JULIO": 7, "AGOSTO": 8,
+            "SEPTIEMBRE": 9, "OCTUBRE": 10, "NOVIEMBRE": 11, "DICIEMBRE": 12
+        }
+
+        def obtener_llave_ordenamiento(item):
+            # item['periodo_liq'] suele ser "MES AÑO" (ej: "JUNIO 2026")
+            partes = item['periodo_liq'].upper().strip().split()
+
+            # Extraer año (si viene en el string, si no, asume 0)
+            anio = int(partes[1]) if len(
+                partes) > 1 and partes[1].isdigit() else 0
+
+            # Extraer mes
+            nombre_mes = partes[0] if partes else ""
+            mes_num = MESES_MAP.get(nombre_mes, 0)
+
+            # Extraer quincena como entero (ej: "1" o "2")
+            try:
+                quincena = int(item.get('quincena_pago', 1))
+            except (ValueError, TypeError):
+                quincena = 1
+
+            # Retorna una tupla: (Año, Mes, Quincena) para comparar numéricamente
+            return (anio, mes_num, quincena)
+
+        # Convertir el diccionario de periodos únicos a lista
+        lista_resultado = list(periodos_unicos.values())
+
+        # Ordenar la lista: de la más reciente a la más vieja (reverse=True)
+        lista_resultado.sort(key=obtener_llave_ordenamiento, reverse=True)
+
+        return lista_resultado
+
+    except Exception as e:
+        error_msg = f"Error Interno de Python: {str(e)}"
+        raise HTTPException(status_code=500, detail=error_msg)
