@@ -16,6 +16,10 @@ from database import get_db
 from pydantic import BaseModel
 import httpx
 from core.security import get_current_user, get_current_user_unblocked, supabase_client
+from dotenv import load_dotenv
+
+load_dotenv(".env.local")
+load_dotenv(".env")
 
 # NO BORRAR: Requerido por el motor matemático
 import numpy as np
@@ -98,9 +102,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
+raw_origins = os.getenv("FRONTEND_URL", "http://localhost:5173")
+allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -127,6 +134,20 @@ def read_root(db: Session = Depends(get_db)):
             "status": "error",
             "message": f"Error de conexión a la base de datos: {str(e)}"
         }
+
+
+@app.get("/health")
+def health_check(db: Session = Depends(get_db)):
+    """Endpoint de Health Check para el balanceador de carga de Render."""
+    try:
+        # Ping ligero a la base de datos
+        result = db.execute(text("SELECT 1")).scalar()
+        if result == 1:
+            return {"status": "ok", "database": "connected"}
+        else:
+            raise HTTPException(status_code=503, detail="Unexpected DB response")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"DB Connection failed: {str(e)}")
 
 
 @app.get("/api/v1/mi-ip")

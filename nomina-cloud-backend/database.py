@@ -4,13 +4,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
 
-# Cargar las variables de entorno desde el archivo .env
-load_dotenv()
+# Intentar cargar .env.local primero, luego .env como fallback.
+# En Render, esto no hará nada y las variables se tomarán del sistema operativo.
+load_dotenv(".env.local")
+load_dotenv(".env")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise ValueError("No se encontró DATABASE_URL en el archivo .env")
+    raise ValueError("No se encontró DATABASE_URL en el entorno (OS) ni en los archivos .env / .env.local")
 
 # Creación del engine de SQLAlchemy
 engine = create_engine(DATABASE_URL)
