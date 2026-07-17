@@ -153,7 +153,9 @@ def health_check(db: Session = Depends(get_db)):
 @app.get("/api/v1/mi-ip")
 async def get_my_ip():
     """Endpoint temporal para conocer la IP pública del servidor."""
-    async with httpx.AsyncClient() as client:
+    proxy_url = os.getenv("PROXY_URL")
+    client_kwargs = {"proxy": proxy_url} if proxy_url else {}
+    async with httpx.AsyncClient(**client_kwargs) as client:
         response = await client.get("https://api.ipify.org?format=json")
         response.raise_for_status()
         return response.json()
@@ -183,8 +185,10 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
     }
 
     nuevo_estado = current_user.get("estado_contacto")
+    proxy_url = os.getenv("PROXY_URL")
+    client_kwargs = {"proxy": proxy_url} if proxy_url else {}
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(**client_kwargs) as client:
             resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
             if resp_contactos.status_code == 200:
                 data_contactos = resp_contactos.json()
@@ -287,7 +291,9 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         }
 
     try:
-        async with httpx.AsyncClient() as client:
+        proxy_url = os.getenv("PROXY_URL")
+        client_kwargs = {"proxy": proxy_url} if proxy_url else {}
+        async with httpx.AsyncClient(**client_kwargs) as client:
             # Paso 1: Módulo Contactos
             payload_contacto = {
                 "operation": "techcon",
