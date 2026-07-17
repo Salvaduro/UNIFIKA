@@ -271,6 +271,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                     "ES_SMLV": "SI" if emp["es_smlv"] else "NO",
                     "CON_BONO": "SI" if emp["con_bono"] else "NO",
                     "TIENE_AUX": "SI" if emp["tiene_aux"] else "NO",
+                    "LINK_DRIVE": emp.get("link_drive", ""),
                     "RAZON_SOCIAL": current_user.get("razon_social", ""),
                     "EMAIL_APORTANTE": current_user.get("email", ""),
                 })
@@ -582,16 +583,17 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                         INSERT INTO m_empleados (
                             id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado, 
                             cargo, tipo_contrato, periodo_pago, salario_base, vlr_bono, sal_especie, 
-                            eps, afp, es_smlv, con_bono, tiene_aux
+                            eps, afp, es_smlv, con_bono, tiene_aux, link_drive
                         ) VALUES (
                             :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
                             :cargo, :tipo_contrato, :periodo_pago, :salario_base, :vlr_bono, :sal_especie,
-                            :eps, :afp, :es_smlv, :con_bono, :tiene_aux
+                            :eps, :afp, :es_smlv, :con_bono, :tiene_aux, :link_drive
                         ) ON CONFLICT (id_contrato) DO UPDATE SET 
                             nombre_empleado = EXCLUDED.nombre_empleado,
                             salario_base = EXCLUDED.salario_base,
                             eps = EXCLUDED.eps,
-                            afp = EXCLUDED.afp
+                            afp = EXCLUDED.afp,
+                            link_drive = EXCLUDED.link_drive
                     """)
                     db.execute(insert_query, {
                         "id_contrato": emp["ID_CONTRATO"],
@@ -609,7 +611,8 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                         "afp": emp["FONDO DE PENSIONES"],
                         "es_smlv": True if str(emp["ES_SMLV"]).upper() == "SI" else False,
                         "con_bono": True if str(emp["CON_BONO"]).upper() == "SI" else False,
-                        "tiene_aux": True if str(emp["TIENE_AUX"]).upper() == "SI" else False
+                        "tiene_aux": True if str(emp["TIENE_AUX"]).upper() == "SI" else False,
+                        "link_drive": emp.get("LINK_DRIVE", "")
                     })
                 db.commit()
                 print(f"[DB] ✅ {len(empleados_limpios)} empleados guardados en caché local.")
@@ -677,6 +680,7 @@ async def obtener_detalle_empleado(id_contacto: str, id_empleado: str, db: Sessi
         "ES_SMLV": "SI" if result["es_smlv"] else "NO",
         "CON_BONO": "SI" if result["con_bono"] else "NO",
         "TIENE_AUX": "SI" if result["tiene_aux"] else "NO",
+        "LINK_DRIVE": result.get("link_drive", ""),
         "RAZON_SOCIAL": current_user.get("razon_social", ""),
         "EMAIL_APORTANTE": current_user.get("email", ""),
     }

@@ -332,6 +332,7 @@ function App() {
         VLR_BONO: empleado.VLR_BONO || "",
         EPS: empleado.EPS || "",
         FONDO_PENSIONES: empleado["FONDO DE PENSIONES"] || "",
+        LINK_DRIVE: empleado.LINK_DRIVE || "",
       };
     });
 
@@ -967,14 +968,11 @@ function App() {
 
               <div className="bg-[#eef5f7] rounded-b-lg p-6 md:p-8 space-y-6 border-l border-r border-b border-[#5b97a9]/20">
                 {(() => {
-                  const emp = empleadosEncontrados.find(
-                    (e) => e.ID_CONTRATO === selectedEmpleadoId,
-                  );
-                  if (emp && emp.LINK_DRIVE) {
+                  if (formData.LINK_DRIVE) {
                     return (
                       <div className="flex justify-end -mt-2 mb-2">
                         <a
-                          href={emp.LINK_DRIVE}
+                          href={formData.LINK_DRIVE}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 transition-colors"
