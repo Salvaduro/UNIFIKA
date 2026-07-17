@@ -23,7 +23,7 @@ export default function ResumenNomina({
         const idQuery = idAportante
           ? `?id_aportante=${encodeURIComponent(idAportante)}`
           : "";
-        const url = `http://127.0.0.1:8000/api/v1/nomina/resumen/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}${idQuery}`;
+        const url = `${import.meta.env.VITE_API_URL}/api/v1/nomina/resumen/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}${idQuery}`;
         const res = await apiClient(url);
         if (!res.ok) {
           const err = await res.json();
@@ -33,7 +33,7 @@ export default function ResumenNomina({
         setData(json);
 
         // Fetch closure status
-        const closureUrl = `http://127.0.0.1:8000/api/v1/nomina/estado-cierre/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}${idQuery}`;
+        const closureUrl = `${import.meta.env.VITE_API_URL}/api/v1/nomina/estado-cierre/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}${idQuery}`;
         const closureRes = await apiClient(closureUrl);
         if (closureRes.ok) {
           const closureData = await closureRes.json();
@@ -294,7 +294,7 @@ export default function ResumenNomina({
                   };
 
                   const response = await apiClient(
-                    "http://127.0.0.1:8000/api/v1/nomina/cerrar",
+                    `${import.meta.env.VITE_API_URL}/api/v1/nomina/cerrar`,
                     {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },

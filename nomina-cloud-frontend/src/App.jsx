@@ -184,12 +184,12 @@ function App() {
       try {
         // Sincronización silenciosa de estado Wolkvox
         try {
-          await apiClient("http://127.0.0.1:8000/api/v1/auth/sync-status");
+          await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/auth/sync-status`);
         } catch (syncErr) {
           console.error("Error en sync-status silencioso", syncErr);
         }
 
-        const res = await apiClient("http://127.0.0.1:8000/api/v1/perfil");
+        const res = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/perfil`);
         if (res.ok) {
           const { data } = await res.json();
           setPerfilAportante(data);
@@ -337,7 +337,7 @@ function App() {
 
     if (esTiempoParcial) {
       apiClient(
-        `http://127.0.0.1:8000/api/v1/historico/ultimo-dias/${encodeURIComponent(empleado.ID_CONTRATO)}`,
+        `${import.meta.env.VITE_API_URL}/api/v1/historico/ultimo-dias/${encodeURIComponent(empleado.ID_CONTRATO)}`,
       )
         .then((res) => res.json())
         .then((data) => {
@@ -403,7 +403,7 @@ function App() {
 
     try {
       const response = await apiClient(
-        `http://127.0.0.1:8000/api/v1/empleador/${targetId}/empleados`,
+        `${import.meta.env.VITE_API_URL}/api/v1/empleador/${targetId}/empleados`,
       );
 
       if (!response.ok) {
@@ -595,7 +595,7 @@ function App() {
       ];
 
       const response = await apiClient(
-        "http://127.0.0.1:8000/api/v1/liquidar",
+        `${import.meta.env.VITE_API_URL}/api/v1/liquidar`,
         {
           method: "POST",
           headers: {
@@ -645,7 +645,7 @@ function App() {
       }));
 
       const response = await apiClient(
-        "http://127.0.0.1:8000/api/v1/historico/guardar",
+        `${import.meta.env.VITE_API_URL}/api/v1/historico/guardar`,
         {
           method: "POST",
           headers: {
@@ -701,7 +701,7 @@ function App() {
       };
 
       const response = await apiClient(
-        "http://127.0.0.1:8000/api/v1/comprobante/generar",
+        `${import.meta.env.VITE_API_URL}/api/v1/comprobante/generar`,
         {
           method: "POST",
           headers: {

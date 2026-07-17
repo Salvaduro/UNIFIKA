@@ -20,7 +20,7 @@ export default function DashboardHistorico({ idAportante }) {
         ? `?aportante_id=${encodeURIComponent(idAportante)}`
         : "";
       const response = await apiClient(
-        `http://127.0.0.1:8000/api/v1/nomina/periodos-historico${queryParam}`,
+        `${import.meta.env.VITE_API_URL}/api/v1/nomina/periodos-historico${queryParam}`,
       );
 
       if (!response.ok) {
@@ -50,7 +50,7 @@ export default function DashboardHistorico({ idAportante }) {
     setIsDownloading(true);
     try {
       const response = await apiClient(
-        `http://127.0.0.1:8000/api/v1/nomina/desprendible-pdf/${encodeURIComponent(id_contrato)}/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}`,
+        `${import.meta.env.VITE_API_URL}/api/v1/nomina/desprendible-pdf/${encodeURIComponent(id_contrato)}/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}`,
         {
           // El backend envía binario (application/pdf) o error en texto
           // Pero necesitamos configurarlo si el api client lo soporta o simplemente

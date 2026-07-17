@@ -27,6 +27,7 @@ export const apiClient = async (url, options = {}) => {
 
   // 4. Realizar la petición fetch con los headers actualizados
   const response = await fetch(url, {
+    credentials: "include",
     ...options,
     headers,
   });
