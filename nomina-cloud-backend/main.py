@@ -238,14 +238,51 @@ def obtener_ultimo_dias_laborados(id_contrato: str, db: Session = Depends(get_db
 
 
 @app.get("/api/v1/empleador/{id_contacto}/empleados")
-async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict = Depends(get_current_user)):
+async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Endpoint (Proxy) para obtener todos los empleados de un empleador.
-    Realiza orquestación consultando Módulo Contactos y Módulo Oportunidades de Wolkvox.
-    Aplica seguridad basada en roles (SuperAdmin vs Empleador).
+    Endpoint (Proxy) para obtener todos los empleados de un empleador con Caché en Supabase.
     """
     if current_user.get("rol") != "SuperAdmin":
         id_contacto = current_user["id_aportante"]
+        
+    # 1. Intentar cargar desde Caché Local (Supabase)
+    try:
+        query_empleados = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante")
+        empleados_locales = db.execute(query_empleados, {"id_aportante": id_contacto}).mappings().all()
+        if empleados_locales and len(empleados_locales) > 0:
+            print(f"[CACHE] ✅ {len(empleados_locales)} empleados encontrados localmente. Evitando Wolkvox.")
+            data_local = []
+            for emp in empleados_locales:
+                data_local.append({
+                    "ID_CONTRATO": emp["id_contrato"],
+                    "ID_APORTANTE": emp["id_aportante"],
+                    "ID_EMPLEADO": emp["id_empleado"],
+                    "T_ID_EMPLEADO": emp["t_id_empleado"],
+                    "NOMBRE_EMPLEADO": emp["nombre_empleado"],
+                    "CARGO_DESEMPENEADO": emp["cargo"],
+                    "TIPO_CONTRATO": emp["tipo_contrato"],
+                    "ESTADO_EMPLEADO": emp["estado_empleado"],
+                    "PERIODO_PAGO": emp["periodo_pago"],
+                    "SALARIO_BASE": float(emp["salario_base"]) if emp["salario_base"] else 0,
+                    "VLR_BONO": float(emp["vlr_bono"]) if emp["vlr_bono"] else 0,
+                    "SALARIO_ESPECIE": float(emp["sal_especie"]) if emp["sal_especie"] else 0,
+                    "EPS": emp["eps"],
+                    "FONDO DE PENSIONES": emp["afp"],
+                    "ES_SMLV": "SI" if emp["es_smlv"] else "NO",
+                    "CON_BONO": "SI" if emp["con_bono"] else "NO",
+                    "TIENE_AUX": "SI" if emp["tiene_aux"] else "NO",
+                    "RAZON_SOCIAL": current_user.get("razon_social", ""),
+                    "EMAIL_APORTANTE": current_user.get("email", ""),
+                })
+            return {
+                "status": "success",
+                "empleador": current_user.get("razon_social", ""),
+                "data": data_local
+            }
+    except Exception as e:
+        print(f"[CACHE ERROR] Fallo al consultar m_empleados: {str(e)}")
+
+    print(f"[WOLKVOX] ⚠️ Empleados no encontrados localmente para {id_contacto}. Extrayendo desde Wolkvox...")
     wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
 
@@ -308,8 +345,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
 
             # Verificar si existe "data" y si tiene elementos
             if not data_contactos.get("data") or len(data_contactos["data"]) == 0:
-                raise HTTPException(
-                    status_code=404, detail="El empleador no existe en el Módulo de Contactos de Wolkvox.")
+                return {"status": "success", "empleador": "SIN EMPLEADOR", "data": []}
 
             contacto_data = data_contactos["data"][0]
             nombre_empleador = contacto_data.get("namecontact")
@@ -533,8 +569,53 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                 })
 
             if not empleados_limpios:
-                raise HTTPException(
-                    status_code=404, detail="No se encontraron empleados con IDs válidos.")
+                return {
+                    "status": "success",
+                    "empleador": nombre_empleador,
+                    "data": []
+                }
+
+            # Insertar en DB local
+            try:
+                for emp in empleados_limpios:
+                    insert_query = text("""
+                        INSERT INTO m_empleados (
+                            id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado, 
+                            cargo, tipo_contrato, periodo_pago, salario_base, vlr_bono, sal_especie, 
+                            eps, afp, es_smlv, con_bono, tiene_aux
+                        ) VALUES (
+                            :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
+                            :cargo, :tipo_contrato, :periodo_pago, :salario_base, :vlr_bono, :sal_especie,
+                            :eps, :afp, :es_smlv, :con_bono, :tiene_aux
+                        ) ON CONFLICT (id_contrato) DO UPDATE SET 
+                            nombre_empleado = EXCLUDED.nombre_empleado,
+                            salario_base = EXCLUDED.salario_base,
+                            eps = EXCLUDED.eps,
+                            afp = EXCLUDED.afp
+                    """)
+                    db.execute(insert_query, {
+                        "id_contrato": emp["ID_CONTRATO"],
+                        "id_aportante": id_contacto,
+                        "id_empleado": emp["ID_EMPLEADO"],
+                        "t_id_empleado": emp.get("T_ID_EMPLEADO", "CC"),
+                        "nombre_empleado": emp["NOMBRE_EMPLEADO"],
+                        "cargo": emp["CARGO_DESEMPENEADO"],
+                        "tipo_contrato": emp["TIPO_CONTRATO"],
+                        "periodo_pago": emp["PERIODO_PAGO"],
+                        "salario_base": emp["SALARIO_BASE"],
+                        "vlr_bono": emp["VLR_BONO"],
+                        "sal_especie": emp["SALARIO_ESPECIE"],
+                        "eps": emp["EPS"],
+                        "afp": emp["FONDO DE PENSIONES"],
+                        "es_smlv": True if str(emp["ES_SMLV"]).upper() == "SI" else False,
+                        "con_bono": True if str(emp["CON_BONO"]).upper() == "SI" else False,
+                        "tiene_aux": True if str(emp["TIENE_AUX"]).upper() == "SI" else False
+                    })
+                db.commit()
+                print(f"[DB] ✅ {len(empleados_limpios)} empleados guardados en caché local.")
+            except Exception as e:
+                print(f"[DB ERROR] Error guardando empleados en DB: {str(e)}")
+                db.rollback()
 
             # Paso 4: Respuesta limpia
             return {
