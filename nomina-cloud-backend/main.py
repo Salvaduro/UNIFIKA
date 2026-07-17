@@ -500,21 +500,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                     empleado, "Salario en Especie", 0)
                 con_bono = extract_val(empleado, "Bono NO Salarial", "NO")
                 vlr_bono = extract_val(empleado, "Vlr Bono", 0)
-                raw_link = (
-                    extract_val(empleado, "Link Nomina Empleado") or
-                    extract_val(empleado, "link_nomina_empleado") or
-                    extract_val(empleado, "Link_Nomina_Empleado") or
-                    extract_val(empleado, "Link de Nomina Empleado") or
-                    extract_val(empleado, "Link Nomina") or
-                    extract_val(empleado, "Link de Nomina") or
-                    extract_val(empleado, "link_nomina") or
-                    extract_val(empleado, "link_drive") or
-                    extract_val(empleado, "Link Drive") or
-                    extract_val(empleado, "Link_Drive") or
-                    extract_val(empleado, "LINK_DRIVE") or
-                    extract_val(empleado, "Link Carpeta") or
-                    ""
-                )
+                raw_link = empleado.get("Link Nomina Empleado")
                 link_drive = str(raw_link).strip() if raw_link else ""
                 if link_drive.lower() in ["none", "null", "n/a", "na"]:
                     link_drive = ""
