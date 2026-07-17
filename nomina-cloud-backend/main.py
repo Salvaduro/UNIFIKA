@@ -645,6 +645,48 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         raise HTTPException(status_code=500, detail=f"Error real: {str(e)}")
 
 
+@app.get("/api/v1/empleador/{id_contacto}/empleado/{id_empleado}")
+async def obtener_detalle_empleado(id_contacto: str, id_empleado: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint para traer el detalle de un empleado específico desde la caché local (Supabase).
+    """
+    if current_user.get("rol") != "SuperAdmin":
+        id_contacto = current_user["id_aportante"]
+        
+    query_emp = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante AND id_contrato = :id_contrato")
+    result = db.execute(query_emp, {"id_aportante": id_contacto, "id_contrato": id_empleado}).mappings().first()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado en la base de datos local.")
+        
+    data_local = {
+        "ID_CONTRATO": result["id_contrato"],
+        "ID_APORTANTE": result["id_aportante"],
+        "ID_EMPLEADO": result["id_empleado"],
+        "T_ID_EMPLEADO": result["t_id_empleado"],
+        "NOMBRE_EMPLEADO": result["nombre_empleado"],
+        "CARGO_DESEMPENEADO": result["cargo"],
+        "TIPO_CONTRATO": result["tipo_contrato"],
+        "ESTADO_EMPLEADO": result["estado_empleado"],
+        "PERIODO_PAGO": result["periodo_pago"],
+        "SALARIO_BASE": float(result["salario_base"]) if result["salario_base"] else 0,
+        "VLR_BONO": float(result["vlr_bono"]) if result["vlr_bono"] else 0,
+        "SALARIO_ESPECIE": float(result["sal_especie"]) if result["sal_especie"] else 0,
+        "EPS": result["eps"],
+        "FONDO DE PENSIONES": result["afp"],
+        "ES_SMLV": "SI" if result["es_smlv"] else "NO",
+        "CON_BONO": "SI" if result["con_bono"] else "NO",
+        "TIENE_AUX": "SI" if result["tiene_aux"] else "NO",
+        "RAZON_SOCIAL": current_user.get("razon_social", ""),
+        "EMAIL_APORTANTE": current_user.get("email", ""),
+    }
+    
+    return {
+        "status": "success",
+        "data": data_local
+    }
+
+
 class CierreNominaRequest(BaseModel):
     periodo: str
     quincena: Union[int, str]

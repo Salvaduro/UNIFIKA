@@ -463,28 +463,62 @@ function App() {
     }
   }
 
-  const handleSelectEmpleado = (e) => {
+  const handleSelectEmpleado = async (e) => {
     const selectedId = e.target.value;
     setSelectedEmpleadoId(selectedId);
 
     if (selectedId) {
-      const empleado = empleadosEncontrados.find(
-        (emp) => emp.ID_CONTRATO === selectedId,
-      );
-      if (empleado) {
-        autocompletarFormulario(empleado);
+      try {
+        const targetId = empleadorId || "me";
+        const response = await apiClient(
+          `${import.meta.env.VITE_API_URL}/api/v1/empleador/${targetId}/empleado/${encodeURIComponent(selectedId)}`
+        );
+        if (!response.ok) {
+           throw new Error(`Error HTTP: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data.status === "success" && data.data) {
+           autocompletarFormulario(data.data);
+        } else {
+           throw new Error("Respuesta del servidor sin status success o sin data");
+        }
+      } catch (error) {
+        console.error("Error al cargar detalle del empleado (carpeta):", error);
+        // Fallback local en caso de error
+        const empleado = empleadosEncontrados.find(
+          (emp) => emp.ID_CONTRATO === selectedId,
+        );
+        if (empleado) {
+          autocompletarFormulario(empleado);
+        }
       }
     }
   };
 
-  const handleRowClick = (empResumen) => {
+  const handleRowClick = async (empResumen) => {
     setActiveTab("liquidacion");
-    const empleadoCompleto = empleadosEncontrados.find(
-      (e) => e.ID_CONTRATO === empResumen.id_contrato,
-    );
-    if (empleadoCompleto) {
-      setSelectedEmpleadoId(empleadoCompleto.ID_CONTRATO);
-      autocompletarFormulario(empleadoCompleto);
+    setSelectedEmpleadoId(empResumen.id_contrato);
+
+    try {
+      const targetId = empleadorId || "me";
+      const response = await apiClient(
+        `${import.meta.env.VITE_API_URL}/api/v1/empleador/${targetId}/empleado/${encodeURIComponent(empResumen.id_contrato)}`
+      );
+      if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+      const data = await response.json();
+      if (data.status === "success" && data.data) {
+         autocompletarFormulario(data.data);
+      } else {
+         throw new Error("Respuesta del servidor sin status success o sin data");
+      }
+    } catch (error) {
+      console.error("Error al cargar detalle del empleado en row click:", error);
+      const empleadoCompleto = empleadosEncontrados.find(
+        (e) => e.ID_CONTRATO === empResumen.id_contrato,
+      );
+      if (empleadoCompleto) {
+        autocompletarFormulario(empleadoCompleto);
+      }
     }
   };
 
