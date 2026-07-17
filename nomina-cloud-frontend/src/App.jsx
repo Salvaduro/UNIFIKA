@@ -968,11 +968,18 @@ function App() {
 
               <div className="bg-[#eef5f7] rounded-b-lg p-6 md:p-8 space-y-6 border-l border-r border-b border-[#5b97a9]/20">
                 {(() => {
-                  if (formData.LINK_DRIVE) {
+                  const linkDriveValue = formData.LINK_DRIVE ? String(formData.LINK_DRIVE) : "";
+                  const isValidLink = linkDriveValue && 
+                    linkDriveValue.trim() !== "" && 
+                    linkDriveValue !== "null" && 
+                    linkDriveValue !== "None" &&
+                    linkDriveValue.toLowerCase() !== "n/a";
+                    
+                  if (isValidLink) {
                     return (
                       <div className="flex justify-end -mt-2 mb-2">
                         <a
-                          href={formData.LINK_DRIVE}
+                          href={linkDriveValue}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 transition-colors"
