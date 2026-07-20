@@ -104,7 +104,7 @@ app = FastAPI(
 
 raw_origins = os.getenv("FRONTEND_URL", "http://localhost:5173")
 allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
-allow_origins.extend(["https://app.unifika.co", "https://unifika.co", "http://localhost:5173"])
+allow_origins.extend(["https://app.unifika.co", "http://localhost:5173"])
 allow_origins = list(set(allow_origins))
 
 app.add_middleware(
