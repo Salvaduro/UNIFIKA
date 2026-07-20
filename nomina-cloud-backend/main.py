@@ -497,15 +497,15 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                     nombre_completo = extract_val(
                         empleado, "Nombre del Empleado", "")
 
-                nombre_1 = extract_val(empleado, "NOMBRE_1", "")
-                nombre_2 = extract_val(empleado, "NOMBRE_2", "")
-                apellido_1 = extract_val(empleado, "APELLIDO_1", "")
-                apellido_2 = extract_val(empleado, "APELLIDO_2", "")
-                departamento = extract_val(empleado, "Departamento", "")
-                municipio = extract_val(empleado, "Municipio", "")
-                riesgo_arl = extract_val(empleado, "Tipo de Riesgo ARL", "")
-                ccf = extract_val(empleado, "CAJA COMPENSACION", "")
-                nombre_arl = extract_val(empleado, "ARL", "")
+                nombre_1 = empleado.get("NOMBRE_1", "")
+                nombre_2 = empleado.get("NOMBRE_2", "")
+                apellido_1 = empleado.get("APELLIDO_1", "")
+                apellido_2 = empleado.get("APELLIDO_2", "")
+                departamento = empleado.get("Departamento", "")
+                municipio = empleado.get("Municipio", "")
+                riesgo_arl = empleado.get("Tipo de Riesgo ARL", "")
+                ccf = empleado.get("CAJA COMPENSACION", "")
+                nombre_arl = empleado.get("ARL", "")
 
                 tipo_id_empleado = extract_val(
                     empleado, "Tipo ID Empleado", "")
@@ -735,6 +735,201 @@ async def obtener_detalle_empleado(id_contacto: str, id_empleado: str, db: Sessi
         "status": "success",
         "data": data_local
     }
+
+
+@app.post("/api/v1/empleador/{id_contacto}/empleado/{id_empleado}/sync")
+async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint para sincronizar el detalle de un empleado específico desde Wolkvox.
+    """
+    if current_user.get("rol") != "SuperAdmin":
+        id_contacto = current_user["id_aportante"]
+        
+    wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
+    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+    headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
+    
+    id_opp = id_empleado.split("_")[-1]
+    
+    payload_detalle = {
+        "operation": "techcon",
+        "wolkvox-token": wolkvox_token,
+        "module": "opportunities",
+        "field": "id",
+        "value": id_opp
+    }
+    
+    try:
+        proxy_url = os.getenv("PROXY_URL")
+        client_kwargs = {"proxy": proxy_url} if proxy_url else {}
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            resp_det = await client.post(url_wolkvox, json=payload_detalle, headers=headers)
+            resp_det.raise_for_status()
+            data_det = resp_det.json()
+            
+            if not data_det.get("data") or len(data_det["data"]) == 0:
+                raise HTTPException(status_code=404, detail="Empleado no encontrado en Wolkvox.")
+                
+            emp_wv = data_det["data"][0]
+            
+            # Helper for fields not explicitly flat
+            def extract_val(d, key, default=None):
+                val = d.get(key)
+                if isinstance(val, dict):
+                    if 'convert' in val and val['convert'] is not None:
+                        return val['convert']
+                    return val.get("value", default)
+                return val if val is not None else default
+
+            nombre_completo = emp_wv.get("Nombre del Empleado", "")
+            if not nombre_completo:
+                nombre_completo = extract_val(emp_wv, "Nombre del Empleado", "")
+
+            nombre_1 = emp_wv.get("NOMBRE_1", "")
+            nombre_2 = emp_wv.get("NOMBRE_2", "")
+            apellido_1 = emp_wv.get("APELLIDO_1", "")
+            apellido_2 = emp_wv.get("APELLIDO_2", "")
+            departamento = emp_wv.get("Departamento", "")
+            municipio = emp_wv.get("Municipio", "")
+            riesgo_arl = emp_wv.get("Tipo de Riesgo ARL", "")
+            ccf = emp_wv.get("CAJA COMPENSACION", "")
+            nombre_arl = emp_wv.get("ARL", "")
+            
+            tipo_id_empleado = extract_val(emp_wv, "Tipo ID Empleado", "")
+            tipo_contrato = extract_val(emp_wv, "Condicion Laboral", "TIEMPO COMPLETO")
+            tipo_labor = extract_val(emp_wv, "Tipo de Labor", "")
+            periodo_pago = extract_val(emp_wv, "Frecuencia de Pago", "QUINCENAL")
+            es_smlv = extract_val(emp_wv, "Salario Minimo", "SI")
+            salario_base = extract_val(emp_wv, "Salario Base", 1750905)
+            salario_especie = extract_val(emp_wv, "Salario en Especie", 0)
+            con_bono = extract_val(emp_wv, "Bono NO Salarial", "NO")
+            vlr_bono = extract_val(emp_wv, "Vlr Bono", 0)
+            raw_link = emp_wv.get("Link Nomina Empleado")
+            link_drive = str(raw_link).strip() if raw_link else ""
+            if link_drive.lower() in ["none", "null", "n/a", "na"]:
+                link_drive = ""
+                
+            eps = extract_val(emp_wv, "EPS", "")
+            fondo_pensiones = extract_val(emp_wv, "FONDO DE PENSIONES", "")
+
+            raw_no_incluye = extract_val(emp_wv, "No Incluye Auxilio de Tte", "")
+            val_no_incluye = str(raw_no_incluye).strip().upper() if raw_no_incluye is not None else ""
+            if val_no_incluye in ["", "NO", "FALSE", "0", "NULL", "NONE"]:
+                tiene_aux = "SI"
+            else:
+                tiene_aux = "NO"
+
+            try:
+                salario_base = float(salario_base)
+            except:
+                salario_base = 1750905
+            try:
+                salario_especie = float(salario_especie)
+            except:
+                salario_especie = 0
+            try:
+                vlr_bono = float(vlr_bono)
+            except:
+                vlr_bono = 0
+
+            if str(con_bono).strip().upper() == "NO":
+                vlr_bono = 0
+
+            # UPSERT en Supabase
+            insert_query = text("""
+                INSERT INTO m_empleados (
+                    id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado, 
+                    cargo, tipo_contrato, estado_empleado, periodo_pago, salario_base, vlr_bono, sal_especie, 
+                    eps, afp, es_smlv, con_bono, tiene_aux, nombre_1, nombre_2, apellido_1, apellido_2,
+                    departamento, municipio, riesgo_arl, ccf, arl, link_drive
+                ) VALUES (
+                    :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
+                    :cargo, :tipo_contrato, :estado_empleado, :periodo_pago, :salario_base, :vlr_bono, :sal_especie,
+                    :eps, :afp, :es_smlv, :con_bono, :tiene_aux, :nombre_1, :nombre_2, :apellido_1, :apellido_2,
+                    :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
+                ) ON CONFLICT (id_contrato) DO UPDATE SET 
+                    nombre_empleado = EXCLUDED.nombre_empleado,
+                    salario_base = EXCLUDED.salario_base,
+                    eps = EXCLUDED.eps,
+                    afp = EXCLUDED.afp,
+                    link_drive = EXCLUDED.link_drive,
+                    nombre_1 = EXCLUDED.nombre_1,
+                    nombre_2 = EXCLUDED.nombre_2,
+                    apellido_1 = EXCLUDED.apellido_1,
+                    apellido_2 = EXCLUDED.apellido_2,
+                    departamento = EXCLUDED.departamento,
+                    municipio = EXCLUDED.municipio,
+                    riesgo_arl = EXCLUDED.riesgo_arl,
+                    ccf = EXCLUDED.ccf,
+                    arl = EXCLUDED.arl,
+                    estado_empleado = EXCLUDED.estado_empleado
+            """)
+            db.execute(insert_query, {
+                "id_contrato": id_empleado,
+                "id_aportante": id_contacto,
+                "id_empleado": str(emp_wv.get("ID Empleado") or id_opp),
+                "t_id_empleado": str(tipo_id_empleado).upper(),
+                "nombre_empleado": nombre_completo,
+                "cargo": str(tipo_labor).upper() if tipo_labor else "NO ESPECIFICADO",
+                "tipo_contrato": str(tipo_contrato).upper(),
+                "estado_empleado": emp_wv.get("ESTADO_EMPLEADO", "ACTIVO"),
+                "periodo_pago": str(periodo_pago).upper() if periodo_pago else "QUINCENAL",
+                "salario_base": salario_base,
+                "vlr_bono": vlr_bono,
+                "sal_especie": salario_especie,
+                "eps": str(eps),
+                "afp": str(fondo_pensiones),
+                "es_smlv": True if str(es_smlv).upper() == "SI" else False,
+                "con_bono": True if str(con_bono).upper() == "SI" else False,
+                "tiene_aux": True if str(tiene_aux).upper() == "SI" else False,
+                "nombre_1": str(nombre_1).upper(),
+                "nombre_2": str(nombre_2).upper(),
+                "apellido_1": str(apellido_1).upper(),
+                "apellido_2": str(apellido_2).upper(),
+                "departamento": str(departamento).upper(),
+                "municipio": str(municipio).upper(),
+                "riesgo_arl": str(riesgo_arl).upper(),
+                "ccf": str(ccf).upper(),
+                "arl": str(nombre_arl).upper(),
+                "link_drive": link_drive
+            })
+            db.commit()
+
+            # Devolver el empleado fresco de la BBDD
+            query_emp = text("SELECT * FROM m_empleados WHERE id_contrato = :id_contrato")
+            result = db.execute(query_emp, {"id_contrato": id_empleado}).mappings().first()
+            
+            data_local = {
+                "ID_CONTRATO": result["id_contrato"],
+                "ID_APORTANTE": result["id_aportante"],
+                "ID_EMPLEADO": result["id_empleado"],
+                "T_ID_EMPLEADO": result["t_id_empleado"],
+                "NOMBRE_EMPLEADO": result["nombre_empleado"],
+                "CARGO_DESEMPENEADO": result["cargo"],
+                "TIPO_CONTRATO": result["tipo_contrato"],
+                "ESTADO_EMPLEADO": result["estado_empleado"],
+                "PERIODO_PAGO": result["periodo_pago"],
+                "SALARIO_BASE": float(result["salario_base"]) if result["salario_base"] else 0,
+                "VLR_BONO": float(result["vlr_bono"]) if result["vlr_bono"] else 0,
+                "SALARIO_ESPECIE": float(result["sal_especie"]) if result["sal_especie"] else 0,
+                "EPS": result["eps"],
+                "FONDO DE PENSIONES": result["afp"],
+                "ES_SMLV": "SI" if result["es_smlv"] else "NO",
+                "CON_BONO": "SI" if result["con_bono"] else "NO",
+                "TIENE_AUX": "SI" if result["tiene_aux"] else "NO",
+                "LINK_DRIVE": result.get("link_drive", ""),
+                "RAZON_SOCIAL": current_user.get("razon_social", ""),
+                "EMAIL_APORTANTE": current_user.get("email", ""),
+            }
+            
+            return {
+                "status": "success",
+                "data": data_local
+            }
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error sincronizando empleado: {str(e)}")
 
 
 class CierreNominaRequest(BaseModel):

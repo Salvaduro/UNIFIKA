@@ -167,6 +167,7 @@ function App() {
   const [isLoadingPerfil, setIsLoadingPerfil] = useState(false);
   const [perfilError, setPerfilError] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [empleadosEncontrados, setEmpleadosEncontrados] = useState([]);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState("");
   const [isContractOpen, setIsContractOpen] = useState(false);
@@ -520,6 +521,33 @@ function App() {
       if (empleadoCompleto) {
         autocompletarFormulario(empleadoCompleto);
       }
+    }
+  };
+
+  const handleSyncEmpleado = async (e, idContrato) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    setIsSyncing(true);
+    try {
+      const targetId = empleadorId || "me";
+      const response = await apiClient(
+        `${import.meta.env.VITE_API_URL}/api/v1/empleador/${targetId}/empleado/${encodeURIComponent(idContrato)}/sync`,
+        { method: "POST" }
+      );
+      if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+      const data = await response.json();
+      if (data.status === "success" && data.data) {
+         autocompletarFormulario(data.data);
+         setEmpleadosEncontrados(prev => prev.map(emp => emp.ID_CONTRATO === idContrato ? data.data : emp));
+      } else {
+         throw new Error("Respuesta del servidor sin status success o sin data");
+      }
+    } catch (error) {
+      console.error("Error al sincronizar empleado:", error);
+      alert("Hubo un error sincronizando el empleado con el CRM.");
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -975,21 +1003,20 @@ function App() {
                     linkDriveValue !== "None" &&
                     linkDriveValue.toLowerCase() !== "n/a";
                     
-                  if (isValidLink) {
-                    return (
-                      <div className="flex justify-end -mt-2 mb-2">
+                  return (
+                    <div className="flex justify-end -mt-2 mb-2 gap-2">
+                      {isValidLink && (
                         <a
                           href={linkDriveValue}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 transition-colors"
                         >
-                          📂 Ver Expediente Histórico en Drive
+                          📂 Ver Expediente Histórico
                         </a>
-                      </div>
-                    );
-                  }
-                  return null;
+                      )}
+                    </div>
+                  );
                 })()}
                 <div className="space-y-6">
                   {/* Bloque: Parámetros del Periodo */}
@@ -1091,23 +1118,6 @@ function App() {
                         Empresa Activa:{" "}
                         {perfilAportante?.razon_social || "Cargando..."}
                       </h4>
-                      {(perfilAportante?.rol === "SuperAdmin" || perfilAportante?.rol === "Administrador") && (
-                        <button
-                          type="button"
-                          onClick={() => handleSearchEmpleador("me", true)}
-                          disabled={isSearching}
-                          className="mt-2 sm:mt-0 px-4 py-2 bg-[#5b97a9] text-white text-sm font-bold rounded-lg hover:bg-[#4a7e8e] transition-colors flex items-center shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed"
-                        >
-                          {isSearching ? (
-                            <span className="flex items-center">
-                              <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                              Sincronizando...
-                            </span>
-                          ) : (
-                            "🔄 Sincronizar a CRM"
-                          )}
-                        </button>
-                      )}
                     </div>
 
                     {perfilAportante?.rol === "SuperAdmin" && (
