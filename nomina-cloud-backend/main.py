@@ -776,11 +776,11 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
                 raise HTTPException(status_code=404, detail="Empleado no encontrado en Wolkvox.")
                 
             emp_wv = None
-            id_opp_target = id_empleado.split("_")[-1]
+            target_id = id_empleado.split("_")[-1]
             
-            for opp in data_det["data"]:
-                if str(opp.get("id", "")) == id_opp_target:
-                    emp_wv = opp
+            for oportunidad in data_det["data"]:
+                if str(oportunidad.get("ID Empleado", "")) == target_id:
+                    emp_wv = oportunidad
                     break
                     
             if not emp_wv:
