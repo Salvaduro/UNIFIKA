@@ -752,7 +752,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
     
-    query_admin = text("SELECT razon_social FROM m_usuarios WHERE id_aportante = :id_aportante LIMIT 1")
+    query_admin = text("SELECT razon_social FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
     resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
     nombre_empleador = resultado_admin["razon_social"] if resultado_admin else id_contacto
 
