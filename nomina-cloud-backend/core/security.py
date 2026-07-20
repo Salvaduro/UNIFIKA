@@ -158,13 +158,22 @@ async def get_current_user_unblocked(
                     detail="Error al registrar al usuario en el sistema local."
                 )
 
-            return {
-                "rol": "Empleador",
-                "id_aportante": rut_empleador,
-                "email": user_email,
-                "razon_social": nombre_empleador,
-                "estado_contacto": estado_contacto
-            }
+            # Sincronización en cascada de los empleados inmediatamente después de crear el aportante
+            try:
+                from main import obtener_empleados_por_empleador
+                mock_user = {
+                    "rol": "Empleador",
+                    "id_aportante": rut_empleador,
+                    "email": email_crm.lower() if email_crm else user_email,
+                    "razon_social": nombre_empleador,
+                    "estado_contacto": estado_contacto
+                }
+                await obtener_empleados_por_empleador(id_contacto=rut_empleador, current_user=mock_user, db=db)
+                print(f"[AUTH] ✅ Sincronización en cascada de empleados finalizada para {rut_empleador}.")
+            except Exception as sync_e:
+                print(f"==== ERROR SYNC EMPLEADOS EN LOGIN: {str(sync_e)} ====")
+
+            return mock_user
 
         print(
             "[AUTH] ✅ Aportante encontrado en Caché Local (Supabase). Evitando llamada a Wolkvox.")
