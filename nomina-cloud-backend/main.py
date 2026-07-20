@@ -452,9 +452,29 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
             empleados_limpios = []
 
             # Paso 3: Procesamiento de Lista
-            for empleado in empleados_filtrados:
-                if empleado.get("wolkvox_fase") == "Retirado":
+            for opp_resumen in empleados_filtrados:
+                if opp_resumen.get("wolkvox_fase") == "Retirado":
                     continue
+                    
+                empleado = opp_resumen
+                id_opp = str(opp_resumen.get("id", ""))
+                if id_opp:
+                    # Segunda llamada obligatoria a Wolkvox
+                    payload_detalle = {
+                        "operation": "techcon",
+                        "wolkvox-token": wolkvox_token,
+                        "module": "opportunities",
+                        "field": "id",
+                        "value": id_opp
+                    }
+                    try:
+                        resp_det = await client.post(url_wolkvox, json=payload_detalle, headers=headers)
+                        resp_det.raise_for_status()
+                        data_det = resp_det.json()
+                        if data_det.get("data") and len(data_det["data"]) > 0:
+                            empleado = data_det["data"][0]
+                    except Exception as e:
+                        print(f"Error extrayendo detalle profundo para oportunidad {id_opp}: {e}")
 
                 id_empleado_extraido = extract_val(empleado, "ID Empleado")
 
@@ -586,18 +606,30 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                     insert_query = text("""
                         INSERT INTO m_empleados (
                             id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado, 
-                            cargo, tipo_contrato, periodo_pago, salario_base, vlr_bono, sal_especie, 
-                            eps, afp, es_smlv, con_bono, tiene_aux, link_drive
+                            cargo, tipo_contrato, estado_empleado, periodo_pago, salario_base, vlr_bono, sal_especie, 
+                            eps, afp, es_smlv, con_bono, tiene_aux, nombre_1, nombre_2, apellido_1, apellido_2,
+                            departamento, municipio, riesgo_arl, ccf, arl, link_drive
                         ) VALUES (
                             :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
-                            :cargo, :tipo_contrato, :periodo_pago, :salario_base, :vlr_bono, :sal_especie,
-                            :eps, :afp, :es_smlv, :con_bono, :tiene_aux, :link_drive
+                            :cargo, :tipo_contrato, :estado_empleado, :periodo_pago, :salario_base, :vlr_bono, :sal_especie,
+                            :eps, :afp, :es_smlv, :con_bono, :tiene_aux, :nombre_1, :nombre_2, :apellido_1, :apellido_2,
+                            :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
                         ) ON CONFLICT (id_contrato) DO UPDATE SET 
                             nombre_empleado = EXCLUDED.nombre_empleado,
                             salario_base = EXCLUDED.salario_base,
                             eps = EXCLUDED.eps,
                             afp = EXCLUDED.afp,
-                            link_drive = EXCLUDED.link_drive
+                            link_drive = EXCLUDED.link_drive,
+                            nombre_1 = EXCLUDED.nombre_1,
+                            nombre_2 = EXCLUDED.nombre_2,
+                            apellido_1 = EXCLUDED.apellido_1,
+                            apellido_2 = EXCLUDED.apellido_2,
+                            departamento = EXCLUDED.departamento,
+                            municipio = EXCLUDED.municipio,
+                            riesgo_arl = EXCLUDED.riesgo_arl,
+                            ccf = EXCLUDED.ccf,
+                            arl = EXCLUDED.arl,
+                            estado_empleado = EXCLUDED.estado_empleado
                     """)
                     db.execute(insert_query, {
                         "id_contrato": emp["ID_CONTRATO"],
@@ -607,6 +639,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                         "nombre_empleado": emp["NOMBRE_EMPLEADO"],
                         "cargo": emp["CARGO_DESEMPENEADO"],
                         "tipo_contrato": emp["TIPO_CONTRATO"],
+                        "estado_empleado": emp.get("ESTADO_EMPLEADO", "ACTIVO"),
                         "periodo_pago": emp["PERIODO_PAGO"],
                         "salario_base": emp["SALARIO_BASE"],
                         "vlr_bono": emp["VLR_BONO"],
@@ -616,6 +649,15 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                         "es_smlv": True if str(emp["ES_SMLV"]).upper() == "SI" else False,
                         "con_bono": True if str(emp["CON_BONO"]).upper() == "SI" else False,
                         "tiene_aux": True if str(emp["TIENE_AUX"]).upper() == "SI" else False,
+                        "nombre_1": emp.get("NOMBRE_1", ""),
+                        "nombre_2": emp.get("NOMBRE_2", ""),
+                        "apellido_1": emp.get("APELLIDO_1", ""),
+                        "apellido_2": emp.get("APELLIDO_2", ""),
+                        "departamento": emp.get("DEPARTAMENTO", ""),
+                        "municipio": emp.get("MUNICIPIO", ""),
+                        "riesgo_arl": emp.get("RIESGO_ARL", ""),
+                        "ccf": emp.get("CCF", ""),
+                        "arl": emp.get("NOMBRE_ARL", ""),
                         "link_drive": emp.get("LINK_DRIVE", "")
                     })
                 db.commit()
