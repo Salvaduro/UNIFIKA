@@ -464,15 +464,18 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                         "operation": "techcon",
                         "wolkvox-token": wolkvox_token,
                         "module": "opportunities",
-                        "field": "id",
-                        "value": id_opp
+                        "field": "Contact",
+                        "value": nombre_empleador
                     }
                     try:
                         resp_det = await client.post(url_wolkvox, json=payload_detalle, headers=headers)
                         resp_det.raise_for_status()
                         data_det = resp_det.json()
                         if data_det.get("data") and len(data_det["data"]) > 0:
-                            empleado = data_det["data"][0]
+                            for opp_profundo in data_det["data"]:
+                                if str(opp_profundo.get("id", "")) == id_opp:
+                                    empleado = opp_profundo
+                                    break
                     except Exception as e:
                         print(f"Error extrayendo detalle profundo para oportunidad {id_opp}: {e}")
 
@@ -749,14 +752,16 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
     
-    id_opp = id_empleado.split("_")[-1]
-    
+    query_admin = text("SELECT razon_social FROM m_usuarios WHERE id_aportante = :id_aportante LIMIT 1")
+    resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
+    nombre_empleador = resultado_admin["razon_social"] if resultado_admin else id_contacto
+
     payload_detalle = {
         "operation": "techcon",
         "wolkvox-token": wolkvox_token,
         "module": "opportunities",
-        "field": "id",
-        "value": id_opp
+        "field": "Contact",
+        "value": nombre_empleador
     }
     
     try:
@@ -770,7 +775,16 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
             if not data_det.get("data") or len(data_det["data"]) == 0:
                 raise HTTPException(status_code=404, detail="Empleado no encontrado en Wolkvox.")
                 
-            emp_wv = data_det["data"][0]
+            emp_wv = None
+            id_opp_target = id_empleado.split("_")[-1]
+            
+            for opp in data_det["data"]:
+                if str(opp.get("id", "")) == id_opp_target:
+                    emp_wv = opp
+                    break
+                    
+            if not emp_wv:
+                raise HTTPException(status_code=404, detail="El empleado no se encontró en las oportunidades del contacto.")
             
             # Helper for fields not explicitly flat
             def extract_val(d, key, default=None):

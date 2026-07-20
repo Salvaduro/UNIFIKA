@@ -1005,6 +1005,16 @@ function App() {
                     
                   return (
                     <div className="flex justify-end -mt-2 mb-2 gap-2">
+                      {(perfilAportante?.rol === "SuperAdmin" || perfilAportante?.rol === "Administrador") && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleSyncEmpleado(e, formData.ID_CONTRATO)}
+                          disabled={isSyncing}
+                          className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                        >
+                          {isSyncing ? "Sincronizando..." : "🔄 Sincronizar a CRM"}
+                        </button>
+                      )}
                       {isValidLink && (
                         <a
                           href={linkDriveValue}
