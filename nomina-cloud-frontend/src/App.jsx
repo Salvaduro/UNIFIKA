@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import "./App.css";
 import logoUrl from "./assets/Logo.png";
 import Auth from "./components/Auth";
-import UpdatePassword from "./components/UpdatePassword";
+import ResetPassword from "./components/ResetPassword";
 import ResumenNomina from "./components/ResumenNomina";
 import DashboardHistorico from "./components/DashboardHistorico";
 import { supabase } from "./lib/supabaseClient";
@@ -274,7 +274,7 @@ function App() {
   }, [formData.PERIODO_PAGO]);
 
   if (window.location.pathname === "/actualizar-password") {
-    return <UpdatePassword />;
+    return <ResetPassword />;
   }
 
   if (isLoadingAuth) {

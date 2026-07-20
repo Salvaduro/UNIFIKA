@@ -1,13 +1,12 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-export default function UpdatePassword() {
+export default function ResetPassword() {
   const [loading, setLoading] = useState(false);
   const [nuevaContrasena, setNuevaContrasena] = useState("");
   const [confirmarContrasena, setConfirmarContrasena] = useState("");
   const [message, setMessage] = useState({ type: "", text: "" });
 
-  // Optional: check if we have a hash fragment (access_token) to ensure we're in a recovery session
   useEffect(() => {
     supabase.auth.onAuthStateChange(async (event) => {
       if (event == "PASSWORD_RECOVERY") {
@@ -49,7 +48,6 @@ export default function UpdatePassword() {
       await supabase.auth.signOut();
 
       setTimeout(() => {
-        // Redirigir a inicio limpiando el hash
         window.location.href = "/";
       }, 2000);
     }
@@ -89,7 +87,7 @@ export default function UpdatePassword() {
               type="password"
               value={nuevaContrasena}
               onChange={(e) => setNuevaContrasena(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary outline-none transition-all bg-slate-50 focus:bg-white"
+              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-unifika-accent focus:border-unifika-accent outline-none transition-all bg-slate-50 focus:bg-white"
               placeholder="••••••••"
               required
             />
@@ -102,7 +100,7 @@ export default function UpdatePassword() {
               type="password"
               value={confirmarContrasena}
               onChange={(e) => setConfirmarContrasena(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary outline-none transition-all bg-slate-50 focus:bg-white"
+              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-unifika-accent focus:border-unifika-accent outline-none transition-all bg-slate-50 focus:bg-white"
               placeholder="••••••••"
               required
             />
@@ -112,9 +110,9 @@ export default function UpdatePassword() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-unifika-primary hover:bg-[#002f5a] text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-70 shadow-sm"
+              className="w-full bg-unifika-accent hover:bg-unifika-accent-hover text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-70 shadow-sm"
             >
-              {loading ? "Procesando..." : "Actualizar Contraseña"}
+              {loading ? "Procesando..." : "Actualizar"}
             </button>
             <button
               type="button"
