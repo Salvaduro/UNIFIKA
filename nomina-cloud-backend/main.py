@@ -397,11 +397,6 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
         "data": empleados_limpios[0] if empleados_limpios else None
     }
 
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error sincronizando empleado: {str(e)}")
-
-
 class CierreNominaRequest(BaseModel):
     periodo: str
     quincena: Union[int, str]
