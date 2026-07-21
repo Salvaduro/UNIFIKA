@@ -816,6 +816,7 @@ function App() {
 
   // Logout handler
   const handleLogout = async () => {
+    setSession(null); // Prevent fetchPerfil from firing
     await supabase.auth.signOut();
     localStorage.removeItem("periodo_seleccionado");
     localStorage.removeItem("quincena_seleccionada");
