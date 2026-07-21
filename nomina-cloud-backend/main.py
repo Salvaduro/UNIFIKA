@@ -924,6 +924,10 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
             resultado_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
             resultado_final['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
             resultado_final['OBSERVACIONES'] = row_dict.get('OBSERVACIONES')
+            resultado_final['CARGO'] = row_dict.get('CARGO', 'NO ASIGNADO')
+            resultado_final['TIPO_CONTRATO'] = row_dict.get('TIPO_CONTRATO', '')
+            resultado_final['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
+            resultado_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
 
             return generar_comprobante(resultado_final)
     except Exception as e:
