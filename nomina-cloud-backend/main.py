@@ -220,10 +220,18 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
 
 
 @app.get("/api/v1/perfil")
-@app.post("/api/v1/auth/init-session")
 async def get_perfil_usuario(current_user: dict = Depends(get_current_user)):
+    return {
+        "status": "success",
+        "message": "Token válido y autenticación exitosa.",
+        "user": current_user
+    }
+
+@app.post("/api/v1/auth/init-session")
+async def init_session_endpoint(current_user: dict = Depends(get_current_user_unblocked)):
     """
     Endpoint protegido para inicializar la sesión y validar el perfil (m_aportantes).
+    Usa get_current_user_unblocked para no arrojar 403 prematuramente por estados restringidos.
     """
     return {
         "status": "success",
