@@ -21,8 +21,8 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
         "value": razon_social
     }
     
-    proxy_url = os.getenv("PROXY_URL")
-    client_kwargs = {"proxy": proxy_url} if proxy_url else {}
+    fixie_url = os.getenv("FIXIE_URL")
+    client_kwargs = {"proxies": {"http://": fixie_url, "https://": fixie_url}} if fixie_url else {}
     
     async with httpx.AsyncClient(**client_kwargs) as client:
         resp_det = await client.post(url_wolkvox, json=payload_detalle, headers=headers)

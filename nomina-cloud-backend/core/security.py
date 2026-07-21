@@ -128,8 +128,8 @@ async def get_current_user_unblocked(
                 "value": user_email
             }
 
-            proxy_url = os.getenv("PROXY_URL")
-            client_kwargs = {"proxy": proxy_url} if proxy_url else {}
+            fixie_url = os.getenv("FIXIE_URL")
+            client_kwargs = {"proxies": {"http://": fixie_url, "https://": fixie_url}} if fixie_url else {}
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
