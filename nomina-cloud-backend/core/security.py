@@ -58,10 +58,12 @@ async def get_current_user_unblocked(
             )
 
         # Paso A: Validar o Crear en m_perfiles (Lógica Auto-Sanable)
-        query_perfil = text("SELECT rol FROM m_perfiles WHERE id = :user_id")
+        query_perfil = text("SELECT rol, id_aportante FROM m_perfiles WHERE id = :user_id")
         perfil_result = db.execute(query_perfil, {"user_id": user_id}).mappings().first()
         
         rol_asignado = "Empleador"
+        perfil_id_aportante = None
+        
         if not perfil_result:
             print(f"[AUTH] ⚠️ Perfil no encontrado para {user_id}. Creando perfil por defecto (Empleador)...")
             try:
@@ -73,8 +75,9 @@ async def get_current_user_unblocked(
                 print(f"[AUTH ERROR] No se pudo crear el perfil en m_perfiles: {e}")
         else:
             rol_asignado = perfil_result["rol"]
+            perfil_id_aportante = perfil_result.get("id_aportante")
 
-        print(f"Resultado en m_perfiles: Rol asignado -> {rol_asignado}")
+        print(f"Resultado en m_perfiles: Rol asignado -> {rol_asignado}, id_aportante -> {perfil_id_aportante}")
 
         if rol_asignado == "SuperAdmin":
             return {
@@ -84,14 +87,26 @@ async def get_current_user_unblocked(
                 "razon_social": "ADMINISTRACIÓN GLOBAL"
             }
 
-        # Paso B: Validar Cliente (por Email)
-        query = text(
-            "SELECT id_aportante, razon_social, estado_contacto FROM m_aportantes WHERE email ILIKE :user_email")
-        result = db.execute(
-            query, {"user_email": user_email}).mappings().first()
-        print(
-            f"Resultado en m_aportantes (Cliente): {dict(result) if result else 'Ninguno'}")
+        # Paso B: Validar Cliente (por id_aportante desde el perfil, o fallback a Email)
+        result = None
+        if perfil_id_aportante:
+            query = text("SELECT id_aportante, razon_social, estado_contacto FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
+            result = db.execute(query, {"id_aportante": perfil_id_aportante}).mappings().first()
+            
+        if not result:
+            query = text("SELECT id_aportante, razon_social, estado_contacto FROM m_aportantes WHERE email ILIKE :user_email LIMIT 1")
+            result = db.execute(query, {"user_email": user_email}).mappings().first()
+            
+            # Si lo encontramos por email y el perfil estaba vacío, actualizamos el perfil
+            if result and not perfil_id_aportante:
+                try:
+                    update_perfil = text("UPDATE m_perfiles SET id_aportante = :id_ap WHERE id = :user_id")
+                    db.execute(update_perfil, {"id_ap": result["id_aportante"], "user_id": user_id})
+                    db.commit()
+                except Exception as e:
+                    db.rollback()
 
+        print(f"Resultado en m_aportantes (Cliente): {dict(result) if result else 'Ninguno'}")
         if not result:
             print(
                 "[AUTH] ⚠️ Aportante no encontrado localmente. Consultando API de Wolkvox (JiT)...")
@@ -160,10 +175,16 @@ async def get_current_user_unblocked(
             }
 
             try:
-                supabase_client.table("m_aportantes").insert(
+                supabase_client.table("m_aportantes").upsert(
                     nuevo_aportante).execute()
+                    
+                # Update m_perfiles so we don't have to fallback to email again
+                update_perfil_jit = text("UPDATE m_perfiles SET id_aportante = :id_ap WHERE id = :user_id")
+                db.execute(update_perfil_jit, {"id_ap": rut_empleador, "user_id": user_id})
+                db.commit()
             except Exception as e:
-                print(f"==== ERROR INSERTANDO EN SUPABASE JIT: {str(e)} ====")
+                db.rollback()
+                print(f"==== ERROR HACIENDO UPSERT EN SUPABASE JIT O ACTUALIZANDO PERFIL: {str(e)} ====")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Error al registrar al usuario en el sistema local."
