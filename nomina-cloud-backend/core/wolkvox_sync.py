@@ -9,6 +9,10 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
     Función reutilizable para extraer empleados desde Wolkvox y hacer el upsert profundo de 28 columnas a m_empleados.
     Si target_empleado_id está presente, se filtra y procesa únicamente ese empleado.
     """
+    id_aportante = str(id_aportante)
+    if target_empleado_id is not None:
+        target_empleado_id = str(target_empleado_id)
+        
     wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}

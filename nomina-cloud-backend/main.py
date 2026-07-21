@@ -319,11 +319,16 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
     try:
         from core.wolkvox_sync import sync_empleados_from_wolkvox
         
+        id_contacto = str(id_contacto)
         razon_social = current_user.get("razon_social")
         if not razon_social:
             query_admin = text("SELECT razon_social FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
-            resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
-            razon_social = resultado_admin["razon_social"] if resultado_admin else id_contacto
+            try:
+                resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
+                razon_social = resultado_admin["razon_social"] if resultado_admin else id_contacto
+            except Exception as e:
+                db.rollback()
+                razon_social = id_contacto
 
         empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, razon_social, db)
         
@@ -395,9 +400,16 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
     
+    id_contacto = str(id_contacto)
+    id_empleado = str(id_empleado)
+    
     query_admin = text("SELECT razon_social FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
-    resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
-    nombre_empleador = resultado_admin["razon_social"] if resultado_admin else id_contacto
+    try:
+        resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
+        nombre_empleador = resultado_admin["razon_social"] if resultado_admin else id_contacto
+    except Exception as e:
+        db.rollback()
+        nombre_empleador = id_contacto
 
     from core.wolkvox_sync import sync_empleados_from_wolkvox
     try:
