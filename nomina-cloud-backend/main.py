@@ -167,6 +167,8 @@ async def get_my_ip():
 async def sync_auth_status(current_user: dict = Depends(get_current_user_unblocked), db: Session = Depends(get_db)):
     """Endpoint para sincronizar el estado_contacto con Wolkvox (silencioso)."""
     user_email = current_user.get("email")
+    if user_email:
+        user_email = user_email.lower().strip()
     if not user_email:
         raise HTTPException(
             status_code=400, detail="No email provided in token.")
@@ -432,6 +434,8 @@ def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), c
 
     id_aportante_str = str(aportante_seguro)
     email = current_user.get("email", "desconocido")
+    if email != "desconocido":
+        email = email.lower().strip()
 
     check = text(
         "SELECT 1 FROM t_cierres_nomina WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena")

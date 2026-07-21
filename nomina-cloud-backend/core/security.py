@@ -44,7 +44,7 @@ async def get_current_user_unblocked(
         user_id = user_response.user.id
         user_email = user_response.user.email
         if user_email:
-            user_email = user_email.lower()
+            user_email = user_email.lower().strip()
 
         print("\n==== AUDITORÍA DE AUTH EN REQUISICIÓN ====")
         print(f"ID extraído del JWT (sub): {user_id}")
@@ -170,7 +170,7 @@ async def get_current_user_unblocked(
                 "tipo_documento": tipo_doc_empleador,
                 "tipo_empleador": tipo_empleador,
                 "telefono": telefono,
-                "email": email_crm.lower() if email_crm else user_email,
+                "email": str(email_crm).lower().strip() if email_crm else user_email,
                 "estado_contacto": estado_contacto
             }
 
@@ -196,7 +196,7 @@ async def get_current_user_unblocked(
                 mock_user = {
                     "rol": "Empleador",
                     "id_aportante": rut_empleador,
-                    "email": email_crm.lower() if email_crm else user_email,
+                    "email": str(email_crm).lower().strip() if email_crm else user_email,
                     "razon_social": nombre_empleador,
                     "estado_contacto": estado_contacto
                 }
