@@ -183,14 +183,10 @@ function App() {
       setIsLoadingPerfil(true);
       setPerfilError(null);
       try {
-        // Sincronización silenciosa de estado Wolkvox
-        try {
-          await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/auth/sync-status`);
-        } catch (syncErr) {
-          console.error("Error en sync-status silencioso", syncErr);
-        }
-
-        const res = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/perfil`);
+        // Sincronización en cascada (Sync Guard)
+        const res = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/auth/init-session`, {
+          method: 'POST'
+        });
         if (res.ok) {
           const { data } = await res.json();
           setPerfilAportante(data);
@@ -830,10 +826,10 @@ function App() {
 
   if (isLoadingPerfil) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center">
+      <div className="fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-2xl flex flex-col items-center max-w-sm w-full mx-auto animate-fade-in text-center">
           <svg
-            className="animate-spin h-10 w-10 text-unifika-primary mb-4"
+            className="animate-spin h-14 w-14 text-unifika-primary mb-6"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -852,8 +848,11 @@ function App() {
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
             ></path>
           </svg>
-          <p className="text-slate-600 font-medium text-lg">
-            Cargando perfil de usuario...
+          <h2 className="text-xl font-bold text-slate-800 mb-2 leading-tight">
+            Sincronizando su perfil con el CRM corporativo...
+          </h2>
+          <p className="text-slate-500 text-sm font-medium">
+            Este proceso puede tardar unos segundos. Por favor no cierre ni actualice esta ventana.
           </p>
         </div>
       </div>
