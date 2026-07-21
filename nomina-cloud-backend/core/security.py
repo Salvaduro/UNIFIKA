@@ -159,7 +159,7 @@ async def get_current_user_unblocked(
             estado_contacto = contacto_data.get("Estado Contacto")
             if estado_contacto in ["RETIRADO", "UnicaAfiliacion", "En Mora SS"]:
                 raise HTTPException(
-                    status_code=403, detail="Tu cuenta se encuentra registrada, pero el servicio no está habilitado actualmente. Por favor, comunícate al Tel. 333 6025560 para brindarte atención.")
+                    status_code=403, detail="Su cuenta presenta una novedad. Por favor comuníquese con la línea de soporte 333 6025560.")
 
             nombre_empleador = contacto_data.get("namecontact", "SIN NOMBRE")
             tipo_doc_empleador = contacto_data.get("Tipo ID Contacto", "NIT")

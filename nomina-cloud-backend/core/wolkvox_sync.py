@@ -57,8 +57,7 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                 if str(emp_wv.get("ID Empleado", "")) != str(target_empleado_id):
                     continue
                     
-            if emp_wv.get("wolkvox_fase") == "Retirado":
-                continue
+            # El filtrado de Retirado se manejará a través del mapeo de estado
 
             id_opp = str(emp_wv.get("id", ""))
             raw_id_empleado = emp_wv.get("ID Empleado")
@@ -155,6 +154,12 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                         arl = EXCLUDED.arl,
                         estado_empleado = EXCLUDED.estado_empleado
                 """)
+                fase_status = str(emp_wv.get("wolkvox_fase_status", "")).strip().lower()
+                if fase_status == "lost":
+                    estado_empleado_map = "RETIRADO"
+                else:
+                    estado_empleado_map = "ACTIVO"
+
                 db.execute(insert_query, {
                     "id_contrato": llave_unica,
                     "id_aportante": id_aportante,
@@ -163,7 +168,7 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                     "nombre_empleado": nombre_completo,
                     "cargo": str(tipo_labor).upper() if tipo_labor else "NO ESPECIFICADO",
                     "tipo_contrato": str(tipo_contrato).upper(),
-                    "estado_empleado": emp_wv.get("ESTADO_EMPLEADO", "ACTIVO"),
+                    "estado_empleado": estado_empleado_map,
                     "periodo_pago": str(periodo_pago).upper() if periodo_pago else "QUINCENAL",
                     "salario_base": salario_base,
                     "vlr_bono": vlr_bono,
@@ -194,7 +199,7 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                     "NOMBRE_EMPLEADO": nombre_completo,
                     "CARGO_DESEMPENEADO": str(tipo_labor).upper() if tipo_labor else "NO ESPECIFICADO",
                     "TIPO_CONTRATO": str(tipo_contrato).upper(),
-                    "ESTADO_EMPLEADO": emp_wv.get("ESTADO_EMPLEADO", "ACTIVO"),
+                    "ESTADO_EMPLEADO": estado_empleado_map,
                     "PERIODO_PAGO": str(periodo_pago).upper() if periodo_pago else "QUINCENAL",
                     "SALARIO_BASE": salario_base,
                     "VLR_BONO": vlr_bono,

@@ -269,7 +269,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         
     # 1. Intentar cargar desde Caché Local (Supabase)
     try:
-        query_empleados = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante")
+        query_empleados = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante AND estado_empleado != 'RETIRADO'")
         empleados_locales = db.execute(query_empleados, {"id_aportante": id_contacto}).mappings().all()
         if empleados_locales and len(empleados_locales) > 0:
             print(f"[CACHE] ✅ {len(empleados_locales)} empleados encontrados localmente. Evitando Wolkvox.")
