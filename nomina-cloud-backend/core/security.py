@@ -57,15 +57,26 @@ async def get_current_user_unblocked(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Paso A: Validar SuperAdmin (por ID)
-        query_admin = text(
-            "SELECT rol FROM m_perfiles WHERE id = :user_id AND rol = 'SuperAdmin'")
-        admin_result = db.execute(
-            query_admin, {"user_id": user_id}).mappings().first()
-        print(
-            f"Resultado en m_perfiles (Admin): {dict(admin_result) if admin_result else 'Ninguno'}")
+        # Paso A: Validar o Crear en m_perfiles (Lógica Auto-Sanable)
+        query_perfil = text("SELECT rol FROM m_perfiles WHERE id = :user_id")
+        perfil_result = db.execute(query_perfil, {"user_id": user_id}).mappings().first()
+        
+        rol_asignado = "Empleador"
+        if not perfil_result:
+            print(f"[AUTH] ⚠️ Perfil no encontrado para {user_id}. Creando perfil por defecto (Empleador)...")
+            try:
+                insert_perfil = text("INSERT INTO m_perfiles (id, rol) VALUES (:user_id, 'Empleador')")
+                db.execute(insert_perfil, {"user_id": user_id})
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                print(f"[AUTH ERROR] No se pudo crear el perfil en m_perfiles: {e}")
+        else:
+            rol_asignado = perfil_result["rol"]
 
-        if admin_result:
+        print(f"Resultado en m_perfiles: Rol asignado -> {rol_asignado}")
+
+        if rol_asignado == "SuperAdmin":
             return {
                 "rol": "SuperAdmin",
                 "id_aportante": None,
