@@ -26,6 +26,11 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
     
     async with httpx.AsyncClient(**client_kwargs) as client:
         resp_det = await client.post(url_wolkvox, json=payload_detalle, headers=headers)
+        if resp_det.status_code >= 400:
+            import logging
+            logger = logging.getLogger("uvicorn")
+            logger.error(f"[WOLKVOX/FIXIE ERROR] Status: {resp_det.status_code}, Body: {resp_det.text}")
+            raise HTTPException(status_code=403, detail=f"Error en proveedor externo: {resp_det.text}")
         resp_det.raise_for_status()
         data_det = resp_det.json()
         

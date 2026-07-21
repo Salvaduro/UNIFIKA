@@ -133,8 +133,15 @@ async def get_current_user_unblocked(
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
+                    if resp_contactos.status_code >= 400:
+                        import logging
+                        logger = logging.getLogger("uvicorn")
+                        logger.error(f"[WOLKVOX/FIXIE ERROR] Status: {resp_contactos.status_code}, Body: {resp_contactos.text}")
+                        raise HTTPException(status_code=403, detail=f"Error en proveedor externo: {resp_contactos.text}")
                     resp_contactos.raise_for_status()
                     data_contactos = resp_contactos.json()
+            except HTTPException as http_e:
+                raise http_e
             except Exception as e:
                 print(f"==== ERROR WOLKVOX JIT: {str(e)} ====")
                 raise HTTPException(

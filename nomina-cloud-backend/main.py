@@ -194,7 +194,11 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
             resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
-            if resp_contactos.status_code == 200:
+            if resp_contactos.status_code >= 400:
+                import logging
+                logger = logging.getLogger("uvicorn")
+                logger.error(f"[WOLKVOX/FIXIE ERROR in sync_auth_status] Status: {resp_contactos.status_code}, Body: {resp_contactos.text}")
+            elif resp_contactos.status_code == 200:
                 data_contactos = resp_contactos.json()
                 if data_contactos.get("data") and len(data_contactos["data"]) > 0:
                     contacto_data = data_contactos["data"][0]
@@ -207,6 +211,9 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
                                "estado": nuevo_estado, "email": user_email})
                     db.commit()
     except Exception as e:
+        import logging
+        logger = logging.getLogger("uvicorn")
+        logger.error(f"[WOLKVOX/FIXIE EXCEPTION in sync_auth_status] {str(e)}")
         pass
 
     return {"estado_contacto": nuevo_estado}
