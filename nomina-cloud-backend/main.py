@@ -1193,11 +1193,11 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
         INSERT INTO m_aportantes (id_aportante, razon_social, tipo_documento, tipo_empleador, telefono, email)
         VALUES (:id_aportante, :razon_social, :tipo_documento, :tipo_empleador, :telefono, :email)
         ON CONFLICT (id_aportante) DO UPDATE SET
-            razon_social = EXCLUDED.razon_social,
-            tipo_documento = EXCLUDED.tipo_documento,
-            tipo_empleador = EXCLUDED.tipo_empleador,
-            telefono = EXCLUDED.telefono,
-            email = EXCLUDED.email;
+            razon_social = COALESCE(EXCLUDED.razon_social, m_aportantes.razon_social),
+            tipo_documento = COALESCE(EXCLUDED.tipo_documento, m_aportantes.tipo_documento),
+            tipo_empleador = COALESCE(EXCLUDED.tipo_empleador, m_aportantes.tipo_empleador),
+            telefono = COALESCE(EXCLUDED.telefono, m_aportantes.telefono),
+            email = COALESCE(EXCLUDED.email, m_aportantes.email);
     """)
 
     upsert_empleado_query = text("""
@@ -1212,32 +1212,32 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             :vlr_bono, :sal_especie, :eps, :afp, :es_smlv, :con_bono, :tiene_aux,
             :nombre_1, :nombre_2, :apellido_1, :apellido_2, :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
         ) ON CONFLICT (id_contrato) DO UPDATE SET
-            id_aportante = EXCLUDED.id_aportante,
-            id_empleado = EXCLUDED.id_empleado,
-            t_id_empleado = EXCLUDED.t_id_empleado,
-            nombre_empleado = EXCLUDED.nombre_empleado,
-            cargo = EXCLUDED.cargo,
-            tipo_contrato = EXCLUDED.tipo_contrato,
-            estado_empleado = EXCLUDED.estado_empleado,
-            periodo_pago = EXCLUDED.periodo_pago,
-            salario_base = EXCLUDED.salario_base,
-            vlr_bono = EXCLUDED.vlr_bono,
-            sal_especie = EXCLUDED.sal_especie,
-            eps = EXCLUDED.eps,
-            afp = EXCLUDED.afp,
-            es_smlv = EXCLUDED.es_smlv,
-            con_bono = EXCLUDED.con_bono,
-            tiene_aux = EXCLUDED.tiene_aux,
-            nombre_1 = EXCLUDED.nombre_1,
-            nombre_2 = EXCLUDED.nombre_2,
-            apellido_1 = EXCLUDED.apellido_1,
-            apellido_2 = EXCLUDED.apellido_2,
-            departamento = EXCLUDED.departamento,
-            municipio = EXCLUDED.municipio,
-            riesgo_arl = EXCLUDED.riesgo_arl,
-            ccf = EXCLUDED.ccf,
-            arl = EXCLUDED.arl,
-            link_drive = EXCLUDED.link_drive;
+            id_aportante = COALESCE(EXCLUDED.id_aportante, m_empleados.id_aportante),
+            id_empleado = COALESCE(EXCLUDED.id_empleado, m_empleados.id_empleado),
+            t_id_empleado = COALESCE(EXCLUDED.t_id_empleado, m_empleados.t_id_empleado),
+            nombre_empleado = COALESCE(EXCLUDED.nombre_empleado, m_empleados.nombre_empleado),
+            cargo = COALESCE(EXCLUDED.cargo, m_empleados.cargo),
+            tipo_contrato = COALESCE(EXCLUDED.tipo_contrato, m_empleados.tipo_contrato),
+            estado_empleado = COALESCE(EXCLUDED.estado_empleado, m_empleados.estado_empleado),
+            periodo_pago = COALESCE(EXCLUDED.periodo_pago, m_empleados.periodo_pago),
+            salario_base = COALESCE(EXCLUDED.salario_base, m_empleados.salario_base),
+            vlr_bono = COALESCE(EXCLUDED.vlr_bono, m_empleados.vlr_bono),
+            sal_especie = COALESCE(EXCLUDED.sal_especie, m_empleados.sal_especie),
+            eps = COALESCE(EXCLUDED.eps, m_empleados.eps),
+            afp = COALESCE(EXCLUDED.afp, m_empleados.afp),
+            es_smlv = COALESCE(EXCLUDED.es_smlv, m_empleados.es_smlv),
+            con_bono = COALESCE(EXCLUDED.con_bono, m_empleados.con_bono),
+            tiene_aux = COALESCE(EXCLUDED.tiene_aux, m_empleados.tiene_aux),
+            nombre_1 = COALESCE(EXCLUDED.nombre_1, m_empleados.nombre_1),
+            nombre_2 = COALESCE(EXCLUDED.nombre_2, m_empleados.nombre_2),
+            apellido_1 = COALESCE(EXCLUDED.apellido_1, m_empleados.apellido_1),
+            apellido_2 = COALESCE(EXCLUDED.apellido_2, m_empleados.apellido_2),
+            departamento = COALESCE(EXCLUDED.departamento, m_empleados.departamento),
+            municipio = COALESCE(EXCLUDED.municipio, m_empleados.municipio),
+            riesgo_arl = COALESCE(EXCLUDED.riesgo_arl, m_empleados.riesgo_arl),
+            ccf = COALESCE(EXCLUDED.ccf, m_empleados.ccf),
+            arl = COALESCE(EXCLUDED.arl, m_empleados.arl),
+            link_drive = COALESCE(EXCLUDED.link_drive, m_empleados.link_drive);
     """)
 
     upsert_query = text("""
