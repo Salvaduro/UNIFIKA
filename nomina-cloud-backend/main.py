@@ -211,9 +211,10 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
 
 
 @app.get("/api/v1/perfil")
+@app.post("/api/v1/auth/init-session")
 async def get_perfil_usuario(current_user: dict = Depends(get_current_user)):
     """
-    Endpoint protegido para validar el token de Supabase Auth y devolver el perfil (m_aportantes).
+    Endpoint protegido para inicializar la sesión y validar el perfil (m_aportantes).
     """
     return {
         "status": "success",
