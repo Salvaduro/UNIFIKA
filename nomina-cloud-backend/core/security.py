@@ -129,27 +129,25 @@ async def get_current_user_unblocked(
             }
 
             fixie_url = os.getenv("FIXIE_URL")
-            client_kwargs = {"proxies": {"http://": fixie_url, "https://": fixie_url}} if fixie_url else {}
+            client_kwargs = {"proxy": fixie_url} if fixie_url else {}
             try:
-                import logging
-                logger = logging.getLogger("uvicorn")
-                logger.info("[DEBUG] Iniciando petición a Wolkvox desde backend...")
-                logger.info(f"[DEBUG] Configuración de Proxy: {'ACTIVA' if fixie_url else 'INACTIVA'}")
-                
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     response = await client.post(url_wolkvox, json=payload_contacto, headers=headers, timeout=15)
-                    
-                    logger.info(f"[DEBUG] Wolkvox HTTP Status: {response.status_code}")
-                    logger.info(f"[DEBUG] Wolkvox Response Body: {response.text}")
-                    
-                    response.raise_for_status() # Lanza excepción si es 4xx o 5xx
+                    response.raise_for_status()
                     data_contactos = response.json()
+                    
+                    if not data_contactos.get("data") or len(data_contactos["data"]) == 0:
+                        # Doble Búsqueda (Case-Insensitive Fallback)
+                        payload_contacto["value"] = user_email.upper()
+                        response_upper = await client.post(url_wolkvox, json=payload_contacto, headers=headers, timeout=15)
+                        response_upper.raise_for_status()
+                        data_contactos = response_upper.json()
             except Exception as e:
-                import logging
-                logger = logging.getLogger("uvicorn")
-                logger.error(f"[DEBUG] ERROR CRÍTICO EN CONEXIÓN WOLKVOX: {str(e)}")
-                # ATENCIÓN: Cambiamos intencionalmente a 500 para aislar el fallo
-                raise HTTPException(status_code=500, detail=f"Fallo externo detallado: {str(e)}")
+                print(f"==== ERROR WOLKVOX JIT: {str(e)} ====")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No encontramos tu correo en nuestro sistema. Por favor, comunícate al Tel. 333 6025560 para brindarte atención."
+                )
 
             if not data_contactos.get("data") or len(data_contactos["data"]) == 0:
                 raise HTTPException(

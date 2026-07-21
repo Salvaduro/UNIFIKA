@@ -156,7 +156,7 @@ def health_check(db: Session = Depends(get_db)):
 async def get_my_ip():
     """Endpoint temporal para conocer la IP pública del servidor."""
     fixie_url = os.getenv("FIXIE_URL")
-    client_kwargs = {"proxies": {"http://": fixie_url, "https://": fixie_url}} if fixie_url else {}
+    client_kwargs = {"proxy": fixie_url} if fixie_url else {}
     async with httpx.AsyncClient(**client_kwargs) as client:
         response = await client.get("https://api.ipify.org?format=json")
         response.raise_for_status()
@@ -190,7 +190,7 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
 
     nuevo_estado = current_user.get("estado_contacto")
     fixie_url = os.getenv("FIXIE_URL")
-    client_kwargs = {"proxies": {"http://": fixie_url, "https://": fixie_url}} if fixie_url else {}
+    client_kwargs = {"proxy": fixie_url} if fixie_url else {}
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
             resp_contactos = await client.post(url_wolkvox, json=payload_contacto, headers=headers)
