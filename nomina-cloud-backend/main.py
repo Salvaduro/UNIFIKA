@@ -986,7 +986,8 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     pdf.cell(50, 6, f"Tipo ID: {row.get('T_ID_EMPLEADO', '')}",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    pdf.cell(95, 6, f"Cargo: {row.get('CARGO', 'NO ASIGNADO')}")
+    cargo_val = str(row.get('CARGO') or row.get('CARGO_DESEMPENEADO') or 'NO ASIGNADO').strip()
+    pdf.cell(95, 6, f"Cargo: {cargo_val}")
     total_dias = forzar_numero(row.get('DIAS_LABORADOS', 0))
     pdf.cell(60, 6, f"Días/Horas Liq: {total_dias:.1f}")
     pdf.cell(50, 6, f"ID: {id_empleado}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
