@@ -405,6 +405,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     
     id_contacto = str(id_contacto)
     id_empleado = str(id_empleado)
+    cedula_real = id_empleado.split('_')[-1] if '_' in id_empleado else id_empleado
     
     query_admin = text("SELECT razon_social FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
     try:
@@ -416,7 +417,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
 
     from core.wolkvox_sync import sync_empleados_from_wolkvox
     try:
-        empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, nombre_empleador, db, target_empleado_id=id_empleado)
+        empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, nombre_empleador, db, target_empleado_id=cedula_real)
     except Exception as e:
         import traceback
         traceback.print_exc()
