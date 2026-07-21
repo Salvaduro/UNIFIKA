@@ -264,6 +264,8 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
     """
     if current_user.get("rol") != "SuperAdmin":
         id_contacto = current_user["id_aportante"]
+    
+    id_contacto = str(id_contacto)
         
     # 1. Intentar cargar desde Caché Local (Supabase)
     try:
@@ -301,6 +303,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                 "data": data_local
             }
     except Exception as e:
+        db.rollback()
         print(f"[CACHE ERROR] Fallo al consultar m_empleados: {str(e)}")
 
     print(f"[WOLKVOX] ⚠️ Empleados no encontrados localmente para {id_contacto}. Extrayendo desde Wolkvox...")
