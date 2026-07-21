@@ -180,6 +180,9 @@ async def get_current_user_unblocked(
                 "email": str(email_crm).lower().strip() if email_crm else user_email,
                 "estado_contacto": estado_contacto
             }
+            
+            # Limpiar payload para evitar sobreescribir con NULL o vacío durante el Upsert Parcial
+            nuevo_aportante = {k: v for k, v in nuevo_aportante.items() if v}
 
             try:
                 supabase_client.table("m_aportantes").upsert(

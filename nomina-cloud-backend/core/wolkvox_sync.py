@@ -138,21 +138,21 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                         :eps, :afp, :es_smlv, :con_bono, :tiene_aux, :nombre_1, :nombre_2, :apellido_1, :apellido_2,
                         :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
                     ) ON CONFLICT (id_contrato) DO UPDATE SET 
-                        nombre_empleado = EXCLUDED.nombre_empleado,
-                        salario_base = EXCLUDED.salario_base,
-                        eps = EXCLUDED.eps,
-                        afp = EXCLUDED.afp,
-                        link_drive = EXCLUDED.link_drive,
-                        nombre_1 = EXCLUDED.nombre_1,
-                        nombre_2 = EXCLUDED.nombre_2,
-                        apellido_1 = EXCLUDED.apellido_1,
-                        apellido_2 = EXCLUDED.apellido_2,
-                        departamento = EXCLUDED.departamento,
-                        municipio = EXCLUDED.municipio,
-                        riesgo_arl = EXCLUDED.riesgo_arl,
-                        ccf = EXCLUDED.ccf,
-                        arl = EXCLUDED.arl,
-                        estado_empleado = EXCLUDED.estado_empleado
+                        nombre_empleado = COALESCE(EXCLUDED.nombre_empleado, m_empleados.nombre_empleado),
+                        salario_base = COALESCE(EXCLUDED.salario_base, m_empleados.salario_base),
+                        eps = COALESCE(EXCLUDED.eps, m_empleados.eps),
+                        afp = COALESCE(EXCLUDED.afp, m_empleados.afp),
+                        link_drive = COALESCE(EXCLUDED.link_drive, m_empleados.link_drive),
+                        nombre_1 = COALESCE(EXCLUDED.nombre_1, m_empleados.nombre_1),
+                        nombre_2 = COALESCE(EXCLUDED.nombre_2, m_empleados.nombre_2),
+                        apellido_1 = COALESCE(EXCLUDED.apellido_1, m_empleados.apellido_1),
+                        apellido_2 = COALESCE(EXCLUDED.apellido_2, m_empleados.apellido_2),
+                        departamento = COALESCE(EXCLUDED.departamento, m_empleados.departamento),
+                        municipio = COALESCE(EXCLUDED.municipio, m_empleados.municipio),
+                        riesgo_arl = COALESCE(EXCLUDED.riesgo_arl, m_empleados.riesgo_arl),
+                        ccf = COALESCE(EXCLUDED.ccf, m_empleados.ccf),
+                        arl = COALESCE(EXCLUDED.arl, m_empleados.arl),
+                        estado_empleado = COALESCE(EXCLUDED.estado_empleado, m_empleados.estado_empleado)
                 """)
                 fase_status = str(emp_wv.get("wolkvox_fase_status", "")).strip().lower()
                 if fase_status == "lost":
