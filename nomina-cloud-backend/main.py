@@ -260,13 +260,72 @@ def obtener_ultimo_dias_laborados(id_contrato: str, db: Session = Depends(get_db
 @app.get("/api/v1/empleador/{id_contacto}/empleados")
 async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Endpoint (Proxy) para obtener todos los empleados de un empleador con Caché en Supabase.
+    Endpoint (Proxy) para obtener todos los empleados de un empleador con Caché en Supabase y JiT Fallback en cascada.
     """
     if current_user.get("rol") != "SuperAdmin":
         id_contacto = current_user["id_aportante"]
     
     id_contacto = str(id_contacto)
-        
+    
+    # Paso A: Consulta m_aportantes local
+    query_admin = text("SELECT id_aportante, razon_social, email, estado_contacto FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
+    try:
+        resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
+    except Exception as e:
+        db.rollback()
+        resultado_admin = None
+
+    # Paso B: JiT Fallback a Wolkvox (Contactos) si el aportante no existe
+    if not resultado_admin:
+        import os, httpx
+        print(f"[WOLKVOX] ⚠️ Aportante {id_contacto} no encontrado localmente. Extrayendo desde Wolkvox (JiT)...")
+        wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
+        if wolkvox_token:
+            url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+            headers = {"Content-Type": "application/json"}
+            payload_contacto = {
+                "operation": "techcon",
+                "wolkvox-token": wolkvox_token,
+                "module": "contacts",
+                "field": "ID Contacto",
+                "value": id_contacto
+            }
+            fixie_url = os.getenv("FIXIE_URL")
+            client_kwargs = {"proxy": fixie_url} if fixie_url else {}
+            try:
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    response = await client.post(url_wolkvox, json=payload_contacto, headers=headers, timeout=15)
+                    if response.status_code == 200:
+                        data_contactos = response.json()
+                        if data_contactos.get("data") and len(data_contactos["data"]) > 0:
+                            contacto_data = data_contactos["data"][0]
+                            from core.security import supabase_client
+                            
+                            nuevo_aportante = {
+                                "id_aportante": contacto_data.get("ID Contacto", id_contacto),
+                                "razon_social": contacto_data.get("namecontact", "SIN NOMBRE"),
+                                "tipo_documento": contacto_data.get("Tipo ID Contacto", "NIT"),
+                                "tipo_empleador": contacto_data.get("Tipo Empleador", "PERSONA JURÍDICA"),
+                                "telefono": str(contacto_data.get("telephonecontact", {}).get("value", "")) if isinstance(contacto_data.get("telephonecontact"), dict) else str(contacto_data.get("telephonecontact", "")),
+                                "email": str(contacto_data.get("emailcontact", "")).lower().strip(),
+                                "estado_contacto": contacto_data.get("Estado Contacto")
+                            }
+                            nuevo_aportante = {k: v for k, v in nuevo_aportante.items() if v}
+                            
+                            try:
+                                supabase_client.table("m_aportantes").upsert(nuevo_aportante).execute()
+                                resultado_admin = nuevo_aportante
+                            except Exception as e_upsert:
+                                print(f"==== ERROR UPSERT JIT Aportante: {str(e_upsert)} ====")
+            except Exception as e_net:
+                print(f"==== ERROR WOLKVOX JIT NETWORK: {str(e_net)} ====")
+
+    if not resultado_admin:
+        raise HTTPException(status_code=404, detail=f"Aportante con ID {id_contacto} no encontrado en el sistema ni en el CRM.")
+
+    razon_social = resultado_admin.get("razon_social", id_contacto)
+    email_aportante = resultado_admin.get("email", "")
+
     # 1. Intentar cargar desde Caché Local (Supabase)
     try:
         query_empleados = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante AND estado_empleado != 'RETIRADO'")
@@ -294,12 +353,12 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                     "CON_BONO": "SI" if emp["con_bono"] else "NO",
                     "TIENE_AUX": "SI" if emp["tiene_aux"] else "NO",
                     "LINK_DRIVE": emp.get("link_drive", ""),
-                    "RAZON_SOCIAL": current_user.get("razon_social", ""),
-                    "EMAIL_APORTANTE": current_user.get("email", ""),
+                    "RAZON_SOCIAL": razon_social,
+                    "EMAIL_APORTANTE": email_aportante,
                 })
             return {
                 "status": "success",
-                "empleador": current_user.get("razon_social", ""),
+                "empleador": razon_social,
                 "data": data_local
             }
     except Exception as e:
@@ -319,20 +378,10 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
             }]
         }
         
+    # Paso C: Extracción en cascada a Wolkvox (Oportunidades)
     try:
         from core.wolkvox_sync import sync_empleados_from_wolkvox
         
-        id_contacto = str(id_contacto)
-        razon_social = current_user.get("razon_social")
-        if not razon_social:
-            query_admin = text("SELECT razon_social FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
-            try:
-                resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
-                razon_social = resultado_admin["razon_social"] if resultado_admin else id_contacto
-            except Exception as e:
-                db.rollback()
-                razon_social = id_contacto
-
         empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, razon_social, db)
         
         return {
