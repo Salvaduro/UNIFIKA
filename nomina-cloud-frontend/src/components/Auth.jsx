@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 export default function Auth() {
@@ -8,6 +8,17 @@ export default function Auth() {
   const [message, setMessage] = useState({ type: "", text: "" });
 
   const [isForgotPasswordMode, setIsForgotPasswordMode] = useState(false);
+
+  useEffect(() => {
+    const queryParams = new URLSearchParams(window.location.search);
+    if (queryParams.get("reason") === "timeout") {
+      setMessage({
+        type: "error",
+        text: "Su sesión ha expirado por inactividad por razones de seguridad.",
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();

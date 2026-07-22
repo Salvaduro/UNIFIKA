@@ -5,6 +5,7 @@ import Auth from "./components/Auth";
 import ResetPassword from "./components/ResetPassword";
 import ResumenNomina from "./components/ResumenNomina";
 import DashboardHistorico from "./components/DashboardHistorico";
+import IdleTimer from "./components/IdleTimer";
 import { supabase } from "./lib/supabaseClient";
 import { apiClient } from "./lib/apiClient";
 
@@ -892,6 +893,7 @@ function App() {
   // BLOQUE 5: RENDERIZADO UI (COMPONENTES)
   // ==========================================
   return (
+    <IdleTimer>
     <div className="min-h-screen bg-slate-50 font-sans flex flex-col">
       <nav className="bg-unifika-primary shadow-lg sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -2131,6 +2133,7 @@ function App() {
         )}
       </main>
     </div>
+    </IdleTimer>
   );
 }
 
