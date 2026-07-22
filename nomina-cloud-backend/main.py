@@ -1237,57 +1237,8 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
     df_entrada = df_entrada.drop_duplicates(
         subset=['ID_CONTRATO'], keep='last')
 
-    # 3. Preparar la inserción / actualización en cascada (Aportante -> Empleado -> Novedades)
-    upsert_aportante_query = text("""
-        INSERT INTO m_aportantes (id_aportante, razon_social, tipo_documento, tipo_empleador, telefono, email)
-        VALUES (:id_aportante, :razon_social, :tipo_documento, :tipo_empleador, :telefono, :email)
-        ON CONFLICT (id_aportante) DO UPDATE SET
-            razon_social = COALESCE(EXCLUDED.razon_social, m_aportantes.razon_social),
-            tipo_documento = COALESCE(EXCLUDED.tipo_documento, m_aportantes.tipo_documento),
-            tipo_empleador = COALESCE(EXCLUDED.tipo_empleador, m_aportantes.tipo_empleador),
-            telefono = COALESCE(EXCLUDED.telefono, m_aportantes.telefono),
-            email = COALESCE(EXCLUDED.email, m_aportantes.email);
-    """)
-
-    upsert_empleado_query = text("""
-        INSERT INTO m_empleados (
-            id_contrato, id_aportante, id_empleado, t_id_empleado, nombre_empleado,
-            cargo, tipo_contrato, estado_empleado, periodo_pago, salario_base,
-            vlr_bono, sal_especie, eps, afp, es_smlv, con_bono, tiene_aux,
-            nombre_1, nombre_2, apellido_1, apellido_2, departamento, municipio, riesgo_arl, ccf, arl, link_drive
-        ) VALUES (
-            :id_contrato, :id_aportante, :id_empleado, :t_id_empleado, :nombre_empleado,
-            :cargo, :tipo_contrato, :estado_empleado, :periodo_pago, :salario_base,
-            :vlr_bono, :sal_especie, :eps, :afp, :es_smlv, :con_bono, :tiene_aux,
-            :nombre_1, :nombre_2, :apellido_1, :apellido_2, :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
-        ) ON CONFLICT (id_contrato) DO UPDATE SET
-            id_aportante = COALESCE(EXCLUDED.id_aportante, m_empleados.id_aportante),
-            id_empleado = COALESCE(EXCLUDED.id_empleado, m_empleados.id_empleado),
-            t_id_empleado = COALESCE(EXCLUDED.t_id_empleado, m_empleados.t_id_empleado),
-            nombre_empleado = COALESCE(EXCLUDED.nombre_empleado, m_empleados.nombre_empleado),
-            cargo = COALESCE(EXCLUDED.cargo, m_empleados.cargo),
-            tipo_contrato = COALESCE(EXCLUDED.tipo_contrato, m_empleados.tipo_contrato),
-            estado_empleado = COALESCE(EXCLUDED.estado_empleado, m_empleados.estado_empleado),
-            periodo_pago = COALESCE(EXCLUDED.periodo_pago, m_empleados.periodo_pago),
-            salario_base = COALESCE(EXCLUDED.salario_base, m_empleados.salario_base),
-            vlr_bono = COALESCE(EXCLUDED.vlr_bono, m_empleados.vlr_bono),
-            sal_especie = COALESCE(EXCLUDED.sal_especie, m_empleados.sal_especie),
-            eps = COALESCE(EXCLUDED.eps, m_empleados.eps),
-            afp = COALESCE(EXCLUDED.afp, m_empleados.afp),
-            es_smlv = COALESCE(EXCLUDED.es_smlv, m_empleados.es_smlv),
-            con_bono = COALESCE(EXCLUDED.con_bono, m_empleados.con_bono),
-            tiene_aux = COALESCE(EXCLUDED.tiene_aux, m_empleados.tiene_aux),
-            nombre_1 = COALESCE(EXCLUDED.nombre_1, m_empleados.nombre_1),
-            nombre_2 = COALESCE(EXCLUDED.nombre_2, m_empleados.nombre_2),
-            apellido_1 = COALESCE(EXCLUDED.apellido_1, m_empleados.apellido_1),
-            apellido_2 = COALESCE(EXCLUDED.apellido_2, m_empleados.apellido_2),
-            departamento = COALESCE(EXCLUDED.departamento, m_empleados.departamento),
-            municipio = COALESCE(EXCLUDED.municipio, m_empleados.municipio),
-            riesgo_arl = COALESCE(EXCLUDED.riesgo_arl, m_empleados.riesgo_arl),
-            ccf = COALESCE(EXCLUDED.ccf, m_empleados.ccf),
-            arl = COALESCE(EXCLUDED.arl, m_empleados.arl),
-            link_drive = COALESCE(EXCLUDED.link_drive, m_empleados.link_drive);
-    """)
+    # 3. Preparar la inserción de Novedades (Histórico)
+    # Se eliminaron los UPSERT colaterales a m_aportantes y m_empleados para evitar sobreescrituras con NULL
 
     upsert_query = text("""
         INSERT INTO t_novedades (
@@ -1335,62 +1286,6 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
     records_saved = 0
     try:
         for _, row in df_entrada.iterrows():
-            # Params para aportante
-            # Si es SuperAdmin (None), toma el ID del payload. Si es Empleador, usa el de la sesión.
-            id_aportante_seguro = current_user.get("id_aportante")
-            if not id_aportante_seguro:
-                id_aportante_seguro = str(row.get('ID_APORTANTE', '')).strip()
-
-            if not id_aportante_seguro:
-                raise HTTPException(
-                    status_code=400, detail="No se encontró un ID de aportante válido para guardar el registro.")
-            params_aportante = {
-                "id_aportante": id_aportante_seguro,
-                "razon_social": str(row.get('RAZON_SOCIAL', '')).strip(),
-                "tipo_documento": str(row.get('TIPO_DOCUMENTO', '')).strip(),
-                "tipo_empleador": str(row.get('TIPO_EMPLEADOR', '')).strip(),
-                "telefono": str(row.get('TELEFONO_APORTANTE', '')).strip(),
-                "email": str(row.get('EMAIL_APORTANTE', '')).strip()
-            }
-
-            # Params para empleado
-            es_smlv_bool = str(row.get('ES_SMLV', '')).strip().upper() in [
-                'SI', 'TRUE', '1']
-            con_bono_bool = str(row.get('CON_BONO', '')).strip().upper() in [
-                'SI', 'TRUE', '1']
-            tiene_aux_bool = str(row.get('TIENE_AUX', '')).strip().upper() in [
-                'SI', 'TRUE', '1']
-
-            params_empleado = {
-                "id_contrato": str(row.get('ID_CONTRATO')).strip(),
-                "id_aportante": id_aportante_seguro,
-                "id_empleado": str(row.get('ID_EMPLEADO', '')).strip(),
-                "t_id_empleado": str(row.get('T_ID_EMPLEADO', '')).strip(),
-                "nombre_empleado": str(row.get('NOMBRE_EMPLEADO', '')).strip(),
-                "cargo": str(row.get('CARGO', '')).strip() or str(row.get('CARGO_DESEMPENEADO', '')).strip(),
-                "tipo_contrato": str(row.get('TIPO_CONTRATO', '')).strip(),
-                "estado_empleado": str(row.get('ESTADO_EMPLEADO', 'ACTIVO')).strip(),
-                "periodo_pago": str(row.get('PERIODO_PAGO', '')).strip(),
-                "salario_base": forzar_numero(row.get('SALARIO_BASE', 0)),
-                "vlr_bono": forzar_numero(row.get('VLR_BONO', 0)),
-                "sal_especie": forzar_numero(row.get('SALARIO_ESPECIE', 0)),
-                "eps": str(row.get('EPS', '')).strip(),
-                "afp": str(row.get('FONDO_PENSIONES', '')).strip() or str(row.get('FONDO DE PENSIONES', '')).strip(),
-                "es_smlv": es_smlv_bool,
-                "con_bono": con_bono_bool,
-                "tiene_aux": tiene_aux_bool,
-                "nombre_1": str(row.get('NOMBRE_1', '')).strip(),
-                "nombre_2": str(row.get('NOMBRE_2', '')).strip(),
-                "apellido_1": str(row.get('APELLIDO_1', '')).strip(),
-                "apellido_2": str(row.get('APELLIDO_2', '')).strip(),
-                "departamento": str(row.get('DEPARTAMENTO', '')).strip(),
-                "municipio": str(row.get('MUNICIPIO', '')).strip(),
-                "riesgo_arl": str(row.get('RIESGO_ARL', '')).strip(),
-                "ccf": str(row.get('CCF', '')).strip(),
-                "arl": str(row.get('NOMBRE_ARL', '')).strip(),
-                "link_drive": str(row.get('LINK_DRIVE', '')).strip()
-            }
-
             # Params para novedad
             params = {
                 "id_contrato": str(row.get('ID_CONTRATO')).strip(),
@@ -1422,8 +1317,6 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "sal_especie": forzar_numero(row.get('SALARIO_ESPECIE', 0))
             }
 
-            db.execute(upsert_aportante_query, params_aportante)
-            db.execute(upsert_empleado_query, params_empleado)
             db.execute(upsert_query, params)
             records_saved += 1
 
