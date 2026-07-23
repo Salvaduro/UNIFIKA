@@ -8,6 +8,7 @@ CREATE TABLE m_aportantes (
     id_aportante VARCHAR(50) PRIMARY KEY,
     razon_social VARCHAR(255) NOT NULL,
     tipo_documento VARCHAR(50),
+    carpeta_cliente VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -1,0 +1,96 @@
+================================================================================
+PROMPT MAESTRO DE TRANSFERENCIA DE CONTEXTO E INICIO DE FASE DE DESPLIEGUE CLOUD
+================================================================================
+
+[INSTRUCCIÓN CRÍTICA PARA EL AGENTE IA (ANTIGRAVITY)]
+Estás iniciando una nueva sesión de desarrollo para el proyecto SaaS de Nómina UNIFIKA (Colombia). 
+A continuación se presenta un dossier completo del estado actual de la arquitectura, las decisiones de 
+negocio implementadas, la guía de branding visual de Tailwind CSS, y el plan de acción para el nuevo Hito: 
+Despliegue de la Aplicación en la Nube (Camino A). 
+
+Lee este documento completo para reconstruir el 100% de tu contexto antes de revisar el código adjunto (main.py y app.jsx).
+NO alteres bajo ninguna circunstancia el motor de cálculo matemático, los blindajes de negocio, ni la paleta de colores existente.
+
+--------------------------------------------------------------------------------
+1. ESPECIFICACIÓN DEL STACK TECNOLÓGICO Y HERRAMIENTAS
+--------------------------------------------------------------------------------
+- Backend: Python 3.13 con FastAPI (Uvicorn como servidor ASGI).
+- Frontend: React (Vite) con Tailwind CSS para estilos de interfaz.
+- Base de Datos: PostgreSQL alojado en Supabase (Lógica de sincronización vía 'ON CONFLICT DO UPDATE SET').
+- Fuente de Datos Maestra: CRM Wolkvox (Consumido vía API para sincronización de empleados y novedades).
+- Generación de Documentos: ReportLab en Python para el renderizado dinámico de PDFs de desprendibles de pago.
+- Control de Versiones: Git (La última versión estable de esta fase está sellada bajo el tag 'v1.0-MVP').
+
+--------------------------------------------------------------------------------
+2. RESUMEN DE AVANCES Y LOGROS CONSOLIDADOS (HITO MVP COMPLETO)
+--------------------------------------------------------------------------------
+A. Motor Matemático de Nómina:
+   - Extracción de datos crudos del CRM Wolkvox y liquidación exacta de nómina colombiana (salarios, horas extras, recargos nocturnos, dominicales/festivos, incapacidades, vacaciones y auxilios).
+   - Regla Crítica para Tiempo Parcial (Decreto 2616 de 2013): 
+     * Las horas extras y recargos se excluyen del IBC de seguridad social (Salud, Pensión, ARL, Caja) para evitar distorsiones del modelo de cotización por días de la UGPP.
+     * Excepción ya codificada: Si el empleado de Tiempo Parcial tiene activa la opción de pagar salud (asumida por el empleador), el IBC se fuerza automáticamente al 100% de 1 SMLV (vigente en Colombia para el año en curso), sin sumarle horas extras.
+
+B. Bóveda de Datos Relacional (Supabase):
+   - Tablas maestras e históricas: 'm_aportantes', 'm_empleados' (que ahora incluye la columna 'link_drive' para enlaces del expediente histórico), 't_novedades', y 't_cierres_nomina'.
+   - Llave Compuesta de Temporalidad en 't_novedades': 'id_contrato' + 'periodo_liq' + 'quincena_pago'.
+
+C. Motor de PDFs ReportLab:
+   - Generación exacta del comprobante con nomenclatura inteligente (ej. 'Desprendible_ID_JUNIO_2026_Q1.pdf') listo para descarga.
+
+D. Blindajes de Seguridad y UX:
+   - Bloqueo de Nómina Cerrada: Validación en backend que consulta 't_cierres_nomina' antes de guardar. Si el periodo está cerrado, lanza un HTTP 400 con un mensaje específico indicando que la nómina se encuentra cerrada y que deben contactar al canal de atención.
+   - El frontend captura este error HTTP 400 y lo proyecta en un banner/toast que dura exactamente 5 segundos (5000ms).
+   - Clean Code: Limpieza total de 'print()' en Backend (bloques except huérfanos parchados con 'pass' o 'logging') y eliminación de 'console.log()' o imports muertos en Frontend.
+
+--------------------------------------------------------------------------------
+3. GUÍA DE BRANDING VISUAL Y DISEÑO UI DE TAILWIND CSS (INMUTABLE)
+--------------------------------------------------------------------------------
+Debes respetar estrictamente los siguientes códigos HEX y clases estéticas ya implementadas:
+- Pestañas de Navegación principales (Digitación, Resumen, Histórico): Fondo personalizado '#83a9b2' (clase Tailwind 'bg-[#83a9b2]') con contraste optimizado de texto.
+- Cabecera de Tarjeta Principal ("Detalles de la Relación Laboral / Contrato"): Fondo sólido '#5b97a9' ('bg-[#5b97a9]') con texto e íconos en blanco puro ('text-white font-bold').
+- Cuerpo del Contenedor de Datos (El "Frame" contenedor del formulario): Fondo suave '#eef5f7' ('bg-[#eef5f7]') con bordes redondeados inferiores ('rounded-b-lg') y padding cómodo.
+- Tarjetas e Inputs Internos flotantes: Fondo blanco puro ('bg-white'), bordes redondeados y sombra sutil ('shadow-sm') para generar un efecto tridimensional sobre el fondo pastel.
+- Acordeón Interactivo de "Términos del Contrato":
+  * Encabezado interactivo: Fondo '#5b97a9', hover '#4b8293', texto blanco con chevron animado que rota 180 grados ('transition-transform duration-300').
+  * Cuerpo desplegable (Efecto Hundido de Solo Lectura): Fondo gris inactivo ('bg-slate-100' o 'bg-gray-50') con sombra interna ('shadow-inner').
+  * Alerta de Advertencia de Solo Lectura: Banner estilo 'warning' ('bg-amber-100 border-amber-200 text-amber-800 rounded-md p-3 mb-4').
+  * Inputs deshabilitados: Estilos de solo lectura ('bg-gray-200 text-gray-500 cursor-not-allowed border-gray-300').
+- Badge de Estado de Nómina ("🔒 NÓMINA CERRADA"): Cápsula estilizada con fondo '#babf15' ('bg-[#babf15]'), texto oscuro de alto contraste ('text-slate-900 font-bold px-3 py-1 rounded-full shadow-sm').
+- Encabezado Secundario ("Detalle de Nómina por Empleado" en Resumen): Fondo cenizo mudo '#688b94' ('bg-[#688b94]') con texto blanco.
+- Botones de Acción Principal / CTAs ("Liquidar Nómina", "Aprobar y cerrar nómina"): Fondo corporativo oficial '#babf15' ('bg-[#babf15]'), hover '#a2a812' ('hover:bg-[#a2a812]'), texto 'text-white font-bold transition-colors duration-200'.
+- Botón del Expediente Histórico en Drive: Botón Outline ('border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white transition-colors') que abre 'empleado.link_drive' en una nueva pestaña ('target="_blank"').
+- Títulos y Descripciones Dinámicos (Responsive al estado 'activeTab'):
+  * Digitación/Liquidación: "Liquidación del Periodo" / "Gestiona la información de tus empleados, registra novedades operativas y calcula los salarios del periodo actual."
+  * Resumen y Cierre: "Auditoría y Cierre de Nómina" / "Revisa el consolidado financiero de tus trabajadores, verifica los totales y aprueba la nómina de forma definitiva."
+  * Histórico Anual: "Bóveda Histórica de Nómina" / "Explora periodos anteriores y descarga los comprobantes de pago oficiales de cada empleado, organizados cronológicamente."
+
+--------------------------------------------------------------------------------
+4. NUEVA MISIÓN: CAMINO A - DESPLIEGUE A PRODUCCIÓN (CLOUD DEPLOYMENT)
+--------------------------------------------------------------------------------
+Nuestro objetivo inmediato en este cuaderno es llevar la aplicación de un entorno local a una infraestructura en la nube real. Para ello, implementaremos el siguiente plan por fases:
+
+Fase 1: Preparación del Backend (FastAPI) para Render o Railway:
+   - Configuración de CORS para aceptar únicamente el dominio de producción del Frontend.
+   - Migración de la conexión de base de datos local a variables de entorno dinámicas.
+   - Configuración del comando de arranque en producción usando gunicorn con uvicorn workers o uvicorn estándar (`uvicorn main:app --host 0.0.0.0 --port $PORT`).
+   - Asegurar que las llamadas externas al CRM Wolkvox y Supabase consuman las variables de entorno inyectadas de forma segura.
+
+Fase 2: Preparación del Frontend (React + Vite) para Vercel:
+   - Configuración de las variables de entorno de Vite en producción (ej. 'VITE_API_BASE_URL' apuntando al backend en producción de Render/Railway).
+   - Asegurar que la compilación de producción (`npm run build`) no arroje errores de Types o dependencias y se configure correctamente el archivo 'vercel.json' para el manejo de rutas SPA (Single Page Application).
+
+Fase 3: Configuración de Bases de Datos en Supabase:
+   - Asegurar que las variables de conexión apunten al entorno seguro de producción.
+   - Validar que los triggers de fecha y hora usen estrictamente la estampa de tiempo parametrizada 'America/Bogota'.
+
+--------------------------------------------------------------------------------
+5. INSTRUCCIONES DE EJECUCIÓN INMEDIATA PARA TI (ANTIGRAVITY)
+--------------------------------------------------------------------------------
+1. Confirma que has leído y asimilado este dossier de arquitectura y branding de UNIFIKA.
+2. Analiza los archivos adjuntos 'main.py' (Backend) y 'app.jsx' (o el equivalente de tu Layout principal en React) que te proporcionará el Director de Proyecto.
+3. Propón los cambios exactos requeridos en 'main.py' para adecuar los CORS y la configuración de producción.
+4. Genera los archivos de configuración necesarios para el despliegue de producción ('requirements.txt', 'vercel.json', etc.).
+5. Bríndale al Director las instrucciones detalladas para cargar las variables de entorno en los paneles de control de Render/Railway y Vercel.
+
+¡Estamos listos para el despegue! Procedamos con la máxima precisión técnica.
+================================================================================

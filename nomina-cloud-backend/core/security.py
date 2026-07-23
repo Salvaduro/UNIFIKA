@@ -84,17 +84,18 @@ async def get_current_user_unblocked(
                 "rol": "SuperAdmin",
                 "id_aportante": None,
                 "email": user_email,
-                "razon_social": "ADMINISTRACIÓN GLOBAL"
+                "razon_social": "ADMINISTRACIÓN GLOBAL",
+                "carpeta_cliente": None
             }
 
         # Paso B: Validar Cliente (por id_aportante desde el perfil, o fallback a Email)
         result = None
         if perfil_id_aportante:
-            query = text("SELECT id_aportante, razon_social, estado_contacto FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
+            query = text("SELECT id_aportante, razon_social, estado_contacto, carpeta_cliente FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
             result = db.execute(query, {"id_aportante": perfil_id_aportante}).mappings().first()
             
         if not result:
-            query = text("SELECT id_aportante, razon_social, estado_contacto FROM m_aportantes WHERE email ILIKE :user_email LIMIT 1")
+            query = text("SELECT id_aportante, razon_social, estado_contacto, carpeta_cliente FROM m_aportantes WHERE email ILIKE :user_email LIMIT 1")
             result = db.execute(query, {"user_email": user_email}).mappings().first()
             
             # Si lo encontramos por email y el perfil estaba vacío, actualizamos el perfil
@@ -178,7 +179,8 @@ async def get_current_user_unblocked(
                 "tipo_empleador": tipo_empleador,
                 "telefono": telefono,
                 "email": str(email_crm).lower().strip() if email_crm else user_email,
-                "estado_contacto": estado_contacto
+                "estado_contacto": estado_contacto,
+                "carpeta_cliente": contacto_data.get("Carpeta Cliente")
             }
             
             # Limpiar payload para evitar sobreescribir con NULL o vacío durante el Upsert Parcial
@@ -208,7 +210,8 @@ async def get_current_user_unblocked(
                     "id_aportante": rut_empleador,
                     "email": str(email_crm).lower().strip() if email_crm else user_email,
                     "razon_social": nombre_empleador,
-                    "estado_contacto": estado_contacto
+                    "estado_contacto": estado_contacto,
+                    "carpeta_cliente": contacto_data.get("Carpeta Cliente")
                 }
                 await obtener_empleados_por_empleador(id_contacto=rut_empleador, current_user=mock_user, db=db)
                 print(f"[AUTH] ✅ Sincronización en cascada de empleados finalizada para {rut_empleador}.")
@@ -224,7 +227,8 @@ async def get_current_user_unblocked(
             "id_aportante": result["id_aportante"],
             "email": user_email,
             "razon_social": result["razon_social"],
-            "estado_contacto": result.get("estado_contacto")
+            "estado_contacto": result.get("estado_contacto"),
+            "carpeta_cliente": result.get("carpeta_cliente")
         }
     except Exception as e:
         # If it's already an HTTPException, re-raise it so the detail is preserved

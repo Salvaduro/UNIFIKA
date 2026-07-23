@@ -992,7 +992,7 @@ function App() {
 
               <div className="bg-[#eef5f7] rounded-b-lg p-6 md:p-8 space-y-6 border-l border-r border-b border-[#5b97a9]/20">
                 {(() => {
-                  const linkDriveValue = formData.LINK_DRIVE ? String(formData.LINK_DRIVE) : "";
+                  const linkDriveValue = perfilAportante?.carpeta_cliente ? String(perfilAportante.carpeta_cliente) : "";
                   const isValidLink = linkDriveValue && 
                     linkDriveValue.trim() !== "" && 
                     linkDriveValue !== "null" && 
@@ -1018,7 +1018,7 @@ function App() {
                           rel="noopener noreferrer"
                           className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 transition-colors"
                         >
-                          📂 Ver Expediente Histórico
+                          📂 Ver Información Asociada
                         </a>
                       )}
                     </div>

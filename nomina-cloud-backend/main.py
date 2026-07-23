@@ -268,7 +268,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
     id_contacto = str(id_contacto)
     
     # Paso A: Consulta m_aportantes local
-    query_admin = text("SELECT id_aportante, razon_social, email, estado_contacto FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
+    query_admin = text("SELECT id_aportante, razon_social, email, estado_contacto, carpeta_cliente FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
     try:
         resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
     except Exception as e:
@@ -308,7 +308,8 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                                 "tipo_empleador": contacto_data.get("Tipo Empleador", "PERSONA JURÍDICA"),
                                 "telefono": str(contacto_data.get("telephonecontact", {}).get("value", "")) if isinstance(contacto_data.get("telephonecontact"), dict) else str(contacto_data.get("telephonecontact", "")),
                                 "email": str(contacto_data.get("emailcontact", "")).lower().strip(),
-                                "estado_contacto": contacto_data.get("Estado Contacto")
+                                "estado_contacto": contacto_data.get("Estado Contacto"),
+                                "carpeta_cliente": contacto_data.get("Carpeta Cliente")
                             }
                             nuevo_aportante = {k: v for k, v in nuevo_aportante.items() if v}
                             
