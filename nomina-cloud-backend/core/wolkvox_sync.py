@@ -3,6 +3,9 @@ import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from fastapi import HTTPException
+import logging
+
+logger = logging.getLogger("uvicorn")
 
 async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: Session, target_empleado_id: str = None):
     """
@@ -17,12 +20,18 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
     url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
     
+    if not razon_social or str(razon_social).strip() == "" or str(razon_social).strip().lower() == "none":
+        logger.error(f"[ERROR-SYNC-EMPLEADOS] Razón Social viene vacía o nula para el aportante {id_aportante}. Intentando fallback a ID.")
+        razon_social_busqueda = id_aportante
+    else:
+        razon_social_busqueda = str(razon_social).strip()
+
     payload_detalle = {
         "operation": "techcon",
         "wolkvox-token": wolkvox_token,
         "module": "opportunities",
         "field": "Contact",
-        "value": razon_social
+        "value": razon_social_busqueda
     }
     
     fixie_url = os.getenv("FIXIE_URL")
@@ -30,9 +39,12 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
     
     async with httpx.AsyncClient(**client_kwargs) as client:
         resp_det = await client.post(url_wolkvox, json=payload_detalle, headers=headers)
+        
+        logger.info(f"[DEBUG-OPORTUNIDADES] Buscando con ID: {id_aportante} / Nombre: {razon_social_busqueda}")
+        logger.info(f"[DEBUG-OPORTUNIDADES] HTTP Status: {resp_det.status_code}")
+        logger.info(f"[DEBUG-OPORTUNIDADES] Body: {resp_det.text}")
+
         if resp_det.status_code >= 400:
-            import logging
-            logger = logging.getLogger("uvicorn")
             logger.error(f"[WOLKVOX/FIXIE ERROR] Status: {resp_det.status_code}, Body: {resp_det.text}")
             raise HTTPException(status_code=403, detail=f"Error en proveedor externo: {resp_det.text}")
         resp_det.raise_for_status()
@@ -111,15 +123,18 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
 
             try:
                 salario_base = float(salario_base)
-            except:
+            except Exception as e:
+                logger.error(f"[ERROR-SYNC-EMPLEADOS] Detalle: {str(e)}")
                 salario_base = 1750905
             try:
                 salario_especie = float(salario_especie)
-            except:
+            except Exception as e:
+                logger.error(f"[ERROR-SYNC-EMPLEADOS] Detalle: {str(e)}")
                 salario_especie = 0
             try:
                 vlr_bono = float(vlr_bono)
-            except:
+            except Exception as e:
+                logger.error(f"[ERROR-SYNC-EMPLEADOS] Detalle: {str(e)}")
                 vlr_bono = 0
 
             if str(con_bono).strip().upper() == "NO":
@@ -214,6 +229,7 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                 })
             except Exception as e:
                 db.rollback()
+                logger.error(f"[ERROR-SYNC-EMPLEADOS] Detalle: {str(e)}")
                 print(f"[SYNC ERROR] Error guardando empleado {id_empleado_str}: {str(e)}")
                 
         if target_empleado_id and not empleados_limpios:
