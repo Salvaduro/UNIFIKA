@@ -309,13 +309,17 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                                 "telefono": str(contacto_data.get("telephonecontact", {}).get("value", "")) if isinstance(contacto_data.get("telephonecontact"), dict) else str(contacto_data.get("telephonecontact", "")),
                                 "email": str(contacto_data.get("emailcontact", "")).lower().strip(),
                                 "estado_contacto": contacto_data.get("Estado Contacto"),
-                                "carpeta_cliente": contacto_data.get("Carpeta Cliente")
+                                "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
                             }
                             nuevo_aportante = {k: v for k, v in nuevo_aportante.items() if v}
                             
                             try:
                                 supabase_client.table("m_aportantes").upsert(nuevo_aportante).execute()
                                 resultado_admin = nuevo_aportante
+                                
+                                # Sincronización en cascada (Oportunidades) - Eslabón restaurado
+                                from core.wolkvox_sync import sync_empleados_from_wolkvox
+                                await sync_empleados_from_wolkvox(id_contacto, resultado_admin.get("razon_social", id_contacto), db)
                             except Exception as e_upsert:
                                 print(f"==== ERROR UPSERT JIT Aportante: {str(e_upsert)} ====")
             except Exception as e_net:

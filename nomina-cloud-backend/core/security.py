@@ -180,7 +180,7 @@ async def get_current_user_unblocked(
                 "telefono": telefono,
                 "email": str(email_crm).lower().strip() if email_crm else user_email,
                 "estado_contacto": estado_contacto,
-                "carpeta_cliente": contacto_data.get("Carpeta Cliente")
+                "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
             }
             
             # Limpiar payload para evitar sobreescribir con NULL o vacío durante el Upsert Parcial
@@ -211,7 +211,7 @@ async def get_current_user_unblocked(
                     "email": str(email_crm).lower().strip() if email_crm else user_email,
                     "razon_social": nombre_empleador,
                     "estado_contacto": estado_contacto,
-                    "carpeta_cliente": contacto_data.get("Carpeta Cliente")
+                    "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
                 }
                 await obtener_empleados_por_empleador(id_contacto=rut_empleador, current_user=mock_user, db=db)
                 print(f"[AUTH] ✅ Sincronización en cascada de empleados finalizada para {rut_empleador}.")
