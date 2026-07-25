@@ -126,6 +126,7 @@ function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isCerrado, setIsCerrado] = useState(false);
 
   const calcularPeriodoPorDefecto = () => {
     const hoy = new Date();
@@ -673,6 +674,21 @@ function App() {
 
       if (data && data.length > 0) {
         setResultado(data[0]);
+
+        try {
+          const idQuery = formData.ID_CONTRATO ? `?id_contrato=${encodeURIComponent(formData.ID_CONTRATO)}` : "";
+          const closureRes = await apiClient(
+            `${import.meta.env.VITE_API_URL}/api/v1/nomina/estado-cierre/${encodeURIComponent(periodoLiq)}/${encodeURIComponent(quincenaPago)}${idQuery}`
+          );
+          if (closureRes.ok) {
+            const closureData = await closureRes.json();
+            setIsCerrado(closureData.cerrado);
+          } else {
+            setIsCerrado(false);
+          }
+        } catch (e) {
+          setIsCerrado(false);
+        }
       } else {
         setError("No se recibieron datos de liquidación.");
       }
@@ -686,7 +702,7 @@ function App() {
     }
   };
 
-  const handleGuardarHistorico = async () => {
+  const handleGuardarYDescargar = async () => {
     if (!resultado) return;
     setIsSaving(true);
     setSaveMessage(null);
@@ -704,7 +720,8 @@ function App() {
         OBSERVACIONES: observaciones,
       }));
 
-      const response = await apiClient(
+      // Paso A: Guardar Histórico
+      const saveResponse = await apiClient(
         `${import.meta.env.VITE_API_URL}/api/v1/historico/guardar`,
         {
           method: "POST",
@@ -715,44 +732,17 @@ function App() {
         },
       );
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        const error = new Error(`Error HTTP: ${response.status}`);
-        error.response = { data: errData };
-        throw error;
+      if (!saveResponse.ok) {
+        let errData = {};
+        try { errData = await saveResponse.json(); } catch(e) {}
+        const errorObj = new Error(errData.detail || "Error HTTP: " + saveResponse.status);
+        errorObj.response = { data: errData };
+        throw errorObj;
       }
 
-      const data = await response.json();
-      setSaveMessage({
-        type: "success",
-        text: data.message || "Nómina guardada exitosamente.",
-      });
-      setTimeout(() => {
-        setSaveMessage(null);
-      }, 5000);
-    } catch (error) {
-      console.error("Error al guardar histórico:", error);
-      const errorMessage =
-        error.response?.data?.detail ||
-        "Error al guardar la nómina en la base de datos.";
-      setSaveMessage({ type: "error", text: errorMessage });
-      setTimeout(() => {
-        setSaveMessage(null);
-      }, 5000);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDescargarPDF = async () => {
-    if (!resultado) return;
-    setIsDownloading(true);
-    try {
-      const empleadoOriginal =
-        empleadosEncontrados.find(
-          (emp) => emp.ID_CONTRATO === resultado.ID_CONTRATO,
-        ) || {};
-      const payloadCompleto = {
+      // Paso B: Descargar Desprendible
+      setIsDownloading(true);
+      const pdfPayload = {
         ...empleadoOriginal,
         ...resultado,
         PERIODO_LIQ: periodoLiq,
@@ -760,22 +750,26 @@ function App() {
         OBSERVACIONES: observaciones,
       };
 
-      const response = await apiClient(
+      const pdfResponse = await apiClient(
         `${import.meta.env.VITE_API_URL}/api/v1/comprobante/generar`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(payloadCompleto),
+          body: JSON.stringify(pdfPayload),
         },
       );
 
-      if (!response.ok) {
-        throw new Error(`Error HTTP: ${response.status}`);
+      if (!pdfResponse.ok) {
+        let errData = {};
+        try { errData = await pdfResponse.json(); } catch(e) {}
+        const errorObj = new Error(errData.detail || "Error HTTP: " + pdfResponse.status);
+        errorObj.response = { data: errData };
+        throw errorObj;
       }
 
-      const blob = await response.blob();
+      const blob = await pdfResponse.blob();
       const url = window.URL.createObjectURL(blob);
 
       const a = document.createElement("a");
@@ -807,10 +801,25 @@ function App() {
 
       a.remove();
       window.URL.revokeObjectURL(url);
+
+      // Paso C: Toast de Éxito
+      setSaveMessage({
+        type: "success",
+        text: "Nómina guardada y desprendible generado con éxito.",
+      });
+      setTimeout(() => {
+        setSaveMessage(null);
+      }, 5000);
     } catch (error) {
-      console.error("Error al descargar PDF:", error);
-      alert("Hubo un error al generar el PDF. Por favor, intenta de nuevo.");
+      console.error("Error en Guardar y Descargar:", error);
+      const detail = error.response?.data?.detail || error.message || "Error desconocido al procesar la nómina";
+      const errorMessage = typeof detail === "string" ? detail : JSON.stringify(detail);
+      setSaveMessage({ type: "error", text: errorMessage });
+      setTimeout(() => {
+        setSaveMessage(null);
+      }, 5000);
     } finally {
+      setIsSaving(false);
       setIsDownloading(false);
     }
   };
@@ -2043,49 +2052,38 @@ function App() {
                           {saveMessage.text}
                         </div>
                       )}
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        <button
-                          onClick={handleGuardarHistorico}
-                          disabled={isSaving}
-                          className={`flex-1 flex items-center justify-center px-4 py-2.5 text-sm font-bold rounded-xl transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${isSaving ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 text-white"}`}
-                        >
-                          {isSaving ? "Guardando..." : "Guardar Histórico"}
-                        </button>
-
-                        <button
-                          onClick={handleDescargarPDF}
-                          disabled={isDownloading}
-                          className={`flex-1 flex items-center justify-center px-4 py-2.5 text-sm font-bold rounded-xl transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 ${isDownloading ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-slate-800 hover:bg-slate-900 text-white"}`}
-                        >
-                          {isDownloading ? (
-                            <>
-                              <svg
-                                className="animate-spin -ml-1 mr-2 h-4 w-4 text-slate-500"
-                                xmlns="http://www.w3.org/2000/svg"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                              >
-                                <circle
-                                  className="opacity-25"
-                                  cx="12"
-                                  cy="12"
-                                  r="10"
-                                  stroke="currentColor"
-                                  strokeWidth="4"
-                                ></circle>
-                                <path
-                                  className="opacity-75"
-                                  fill="currentColor"
-                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                ></path>
-                              </svg>
-                              Generando PDF...
-                            </>
-                          ) : (
-                            "Descargar Desprendible"
-                          )}
-                        </button>
-                      </div>
+                      {isCerrado ? (
+                        <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded shadow-sm text-amber-800">
+                          <p className="font-bold flex items-center gap-2 mb-1">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                            Nómina Cerrada
+                          </p>
+                          <p className="text-sm">Esta nómina ya se encuentra CERRADA y no puede ser modificada. Puede descargar una copia del desprendible en la pestaña 'Histórico Anual'.</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <button
+                            onClick={handleGuardarYDescargar}
+                            disabled={isSaving || isDownloading}
+                            className={`flex-1 flex items-center justify-center px-4 py-2.5 text-sm font-bold rounded-xl transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${(isSaving || isDownloading) ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 text-white"}`}
+                          >
+                            {(isSaving || isDownloading) ? (
+                              <>
+                                <svg
+                                  className="animate-spin -ml-1 mr-2 h-4 w-4 text-slate-500"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Procesando...
+                              </>
+                            ) : "Guardar y Descargar Desprendible"}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
