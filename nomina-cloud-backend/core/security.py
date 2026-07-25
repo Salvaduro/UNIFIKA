@@ -161,30 +161,9 @@ async def get_current_user_unblocked(
             if estado_contacto in ["RETIRADO", "UnicaAfiliacion", "En Mora SS"]:
                 raise HTTPException(
                     status_code=403, detail="Su cuenta presenta una novedad. Por favor comuníquese con la línea de soporte 333 6025560.")
-
-            nombre_empleador = contacto_data.get("namecontact", "SIN NOMBRE")
-            tipo_doc_empleador = contacto_data.get("Tipo ID Contacto", "NIT")
+            from core.wolkvox_sync import map_aportante_from_wolkvox
             rut_empleador = contacto_data.get("ID Contacto", "000.000.000-0")
-            tipo_empleador = contacto_data.get(
-                "Tipo Empleador", "PERSONA JURÍDICA")
-            telefono_raw = contacto_data.get("telephonecontact", {})
-            telefono = telefono_raw.get("value", "") if isinstance(
-                telefono_raw, dict) else str(telefono_raw) if telefono_raw else ""
-            email_crm = contacto_data.get("emailcontact", user_email)
-
-            nuevo_aportante = {
-                "id_aportante": rut_empleador,
-                "razon_social": nombre_empleador,
-                "tipo_documento": tipo_doc_empleador,
-                "tipo_empleador": tipo_empleador,
-                "telefono": telefono,
-                "email": str(email_crm).lower().strip() if email_crm else user_email,
-                "estado_contacto": estado_contacto,
-                "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
-            }
-            
-            # Limpiar payload para evitar sobreescribir con NULL o vacío durante el Upsert Parcial
-            nuevo_aportante = {k: v for k, v in nuevo_aportante.items() if v}
+            nuevo_aportante = map_aportante_from_wolkvox(contacto_data, rut_empleador, user_email)
 
             try:
                 supabase_client.table("m_aportantes").upsert(

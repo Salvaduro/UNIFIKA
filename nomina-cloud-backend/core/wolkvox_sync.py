@@ -5,7 +5,32 @@ from sqlalchemy import text
 from fastapi import HTTPException
 import logging
 
+import logging
+
 logger = logging.getLogger("uvicorn")
+
+def map_aportante_from_wolkvox(contacto_data: dict, fallback_id: str, fallback_email: str) -> dict:
+    nombre_empleador = contacto_data.get("namecontact", "SIN NOMBRE")
+    tipo_doc_empleador = contacto_data.get("Tipo ID Contacto", "NIT")
+    rut_empleador = contacto_data.get("ID Contacto", fallback_id)
+    tipo_empleador = contacto_data.get("Tipo Empleador", "PERSONA JURÍDICA")
+    telefono_raw = contacto_data.get("telephonecontact", {})
+    telefono = telefono_raw.get("value", "") if isinstance(telefono_raw, dict) else str(telefono_raw) if telefono_raw else ""
+    email_crm = contacto_data.get("emailcontact", fallback_email)
+
+    nuevo_aportante = {
+        "id_aportante": rut_empleador,
+        "razon_social": nombre_empleador,
+        "tipo_documento": tipo_doc_empleador,
+        "tipo_empleador": tipo_empleador,
+        "telefono": telefono,
+        "email": str(email_crm).lower().strip() if email_crm else fallback_email,
+        "estado_contacto": contacto_data.get("Estado Contacto"),
+        "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
+    }
+    
+    return {k: v for k, v in nuevo_aportante.items() if v is not None and v != ""}
+
 
 async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: Session, target_empleado_id: str = None):
     """

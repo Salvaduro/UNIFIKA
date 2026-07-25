@@ -301,17 +301,8 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                             contacto_data = data_contactos["data"][0]
                             from core.security import supabase_client
                             
-                            nuevo_aportante = {
-                                "id_aportante": contacto_data.get("ID Contacto", id_contacto),
-                                "razon_social": contacto_data.get("namecontact", "SIN NOMBRE"),
-                                "tipo_documento": contacto_data.get("Tipo ID Contacto", "NIT"),
-                                "tipo_empleador": contacto_data.get("Tipo Empleador", "PERSONA JURÍDICA"),
-                                "telefono": str(contacto_data.get("telephonecontact", {}).get("value", "")) if isinstance(contacto_data.get("telephonecontact"), dict) else str(contacto_data.get("telephonecontact", "")),
-                                "email": str(contacto_data.get("emailcontact", "")).lower().strip(),
-                                "estado_contacto": contacto_data.get("Estado Contacto"),
-                                "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
-                            }
-                            nuevo_aportante = {k: v for k, v in nuevo_aportante.items() if v}
+                            from core.wolkvox_sync import map_aportante_from_wolkvox
+                            nuevo_aportante = map_aportante_from_wolkvox(contacto_data, id_contacto, id_contacto)
                             
                             try:
                                 supabase_client.table("m_aportantes").upsert(nuevo_aportante).execute()
@@ -364,6 +355,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
             return {
                 "status": "success",
                 "empleador": razon_social,
+                "carpeta_cliente": resultado_admin.get("carpeta_cliente") if resultado_admin else None,
                 "data": data_local
             }
     except Exception as e:
@@ -392,6 +384,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         return {
             "status": "success",
             "empleador": razon_social,
+            "carpeta_cliente": resultado_admin.get("carpeta_cliente") if resultado_admin else None,
             "data": empleados_limpios
         }
     except Exception as e:
@@ -1227,7 +1220,7 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
         """)
         if db.execute(check_cierre_query, {"periodo": periodo_check, "quincena": quincena_check}).first():
             raise HTTPException(
-                status_code=403, detail="Operación denegada. La nómina para este periodo ya se encuentra CERRADA y es inmutable.")
+                status_code=403, detail="Operación denegada. La nómina para este periodo ya se encuentra CERRADA y NO se puede modificar.")
 
     # 2. Limpieza de entrada: Solo registros únicos por contrato
     if 'ID_CONTRATO' not in df_entrada.columns:
