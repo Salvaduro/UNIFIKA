@@ -32,6 +32,61 @@ def map_aportante_from_wolkvox(contacto_data: dict, fallback_id: str, fallback_e
     return {k: v for k, v in nuevo_aportante.items() if v is not None and v != ""}
 
 
+async def sync_aportante_from_wolkvox(id_aportante: str, db: Session) -> dict:
+    """
+    Función para extraer y actualizar el empleador (Contacto) desde Wolkvox de forma manual.
+    """
+    id_aportante = str(id_aportante)
+    wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
+    if not wolkvox_token:
+        logger.error("[ERROR-SYNC-APORTANTE] WOLKVOX_TOKEN no configurado.")
+        return None
+
+    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+    headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
+    
+    payload_contacto = {
+        "operation": "techcon",
+        "wolkvox-token": wolkvox_token,
+        "module": "contacts",
+        "field": "ID Contacto",
+        "value": id_aportante
+    }
+
+    fixie_url = os.getenv("FIXIE_URL")
+    client_kwargs = {"proxy": fixie_url} if fixie_url else {}
+    
+    try:
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            resp = await client.post(url_wolkvox, json=payload_contacto, headers=headers, timeout=15)
+            
+            logger.info(f"[DEBUG-CONTACTOS] Buscando empleador con ID: {id_aportante}")
+            logger.info(f"[DEBUG-CONTACTOS] HTTP Status: {resp.status_code}")
+            logger.info(f"[DEBUG-CONTACTOS] Body: {resp.text}")
+            
+            if resp.status_code == 200:
+                data_contactos = resp.json()
+                if data_contactos.get("data") and len(data_contactos["data"]) > 0:
+                    contacto_data = data_contactos["data"][0]
+                    
+                    # Extraer email existente para fallback si no hay en crm
+                    query_admin = text("SELECT email FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
+                    resultado_admin = db.execute(query_admin, {"id_aportante": id_aportante}).mappings().first()
+                    fallback_email = resultado_admin["email"] if resultado_admin else ""
+                    
+                    nuevo_aportante = map_aportante_from_wolkvox(contacto_data, id_aportante, fallback_email)
+                    
+                    # UPDATE/UPSERT explícito
+                    from core.security import supabase_client
+                    supabase_client.table("m_aportantes").upsert(nuevo_aportante).execute()
+                    
+                    return nuevo_aportante
+    except Exception as e:
+        logger.error(f"[ERROR-SYNC-APORTANTE] Fallo al extraer o actualizar el aportante {id_aportante}: {str(e)}")
+        
+    return None
+
+
 async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: Session, target_empleado_id: str = None):
     """
     Función reutilizable para extraer empleados desde Wolkvox y hacer el upsert profundo de 28 columnas a m_empleados.

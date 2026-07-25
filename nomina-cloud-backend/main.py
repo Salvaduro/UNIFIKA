@@ -461,8 +461,12 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     except Exception as e:
         db.rollback()
         nombre_empleador = id_contacto
-
-    from core.wolkvox_sync import sync_empleados_from_wolkvox
+    from core.wolkvox_sync import sync_aportante_from_wolkvox, sync_empleados_from_wolkvox
+    
+    # Paso A, B y C: Forzar la sincronización del aportante (Contacto) para capturar legacy data (carpeta_cliente)
+    await sync_aportante_from_wolkvox(id_contacto, db)
+    
+    # Paso 3: Mantener cascada
     try:
         empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, nombre_empleador, db, target_empleado_id=cedula_real)
     except Exception as e:
