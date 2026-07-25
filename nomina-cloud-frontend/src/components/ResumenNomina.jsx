@@ -39,9 +39,11 @@ export default function ResumenNomina({
           const closureData = await closureRes.json();
           setIsCerrado(closureData.cerrado);
         }
-      } catch (err) {
-        console.error(err);
-        setError(err.message);
+      } catch (error) {
+        console.error(error);
+        const detail = error.response?.data?.detail || error.message || "Error desconocido al cargar el resumen";
+        const errorMessage = typeof detail === "string" ? detail : JSON.stringify(detail);
+        setError(errorMessage);
       } finally {
         setLoading(false);
       }
@@ -287,29 +289,37 @@ export default function ResumenNomina({
               ) {
                 setIsClosing(true);
                 try {
-                  const payload = {
-                    periodo: String(periodo).toUpperCase().trim(),
-                    quincena: String(quincena).trim(),
-                    id_aportante: idAportante || null,
-                  };
+                  for (const emp of empleados) {
+                    const payload = {
+                      periodo: String(periodo).toUpperCase().trim(),
+                      quincena: String(quincena).trim(),
+                      id_contrato: emp.id_contrato,
+                    };
 
-                  const response = await apiClient(
-                    `${import.meta.env.VITE_API_URL}/api/v1/nomina/cerrar`,
-                    {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify(payload),
-                    },
-                  );
+                    const response = await apiClient(
+                      `${import.meta.env.VITE_API_URL}/api/v1/nomina/cerrar`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload),
+                      },
+                    );
 
-                  if (response.ok) {
-                    setIsCerrado(true);
-                  } else {
-                    const errData = await response.json();
-                    alert(errData.detail || "Error al cerrar la nómina");
+                    if (!response.ok) {
+                      let errData = {};
+                      try { errData = await response.json(); } catch(e) {}
+                      const errorObj = new Error(errData.detail || "Error al cerrar la nómina");
+                      errorObj.response = { data: errData };
+                      throw errorObj;
+                    }
                   }
-                } catch (err) {
-                  alert("Error de red al cerrar la nómina");
+
+                  setIsCerrado(true);
+                  alert("Nóminas cerradas exitosamente.");
+                } catch (error) {
+                  const detail = error.response?.data?.detail || error.message || "Error desconocido al cerrar la nómina";
+                  const errorMessage = typeof detail === "string" ? detail : JSON.stringify(detail);
+                  alert(errorMessage);
                 } finally {
                   setIsClosing(false);
                 }
