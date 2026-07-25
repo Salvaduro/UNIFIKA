@@ -127,6 +127,7 @@ function App() {
   const [saveMessage, setSaveMessage] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isCerrado, setIsCerrado] = useState(false);
+  const [carpetaCliente, setCarpetaCliente] = useState(null);
 
   const calcularPeriodoPorDefecto = () => {
     const hoy = new Date();
@@ -438,6 +439,7 @@ function App() {
       const data = await response.json();
 
       if (data.status === "success" && data.data && data.data.length > 0) {
+        setCarpetaCliente(data.carpeta_cliente || null);
         if (data.data.length === 1) {
           // Un solo empleado, autocompletar
           const emp = data.data[0];
@@ -1001,7 +1003,7 @@ function App() {
 
               <div className="bg-[#eef5f7] rounded-b-lg p-6 md:p-8 space-y-6 border-l border-r border-b border-[#5b97a9]/20">
                 {(() => {
-                  const linkDriveValue = perfilAportante?.carpeta_cliente ? String(perfilAportante.carpeta_cliente) : "";
+                  const linkDriveValue = carpetaCliente ? String(carpetaCliente) : (perfilAportante?.carpeta_cliente ? String(perfilAportante.carpeta_cliente) : "");
                   const isValidLink = linkDriveValue && 
                     linkDriveValue.trim() !== "" && 
                     linkDriveValue !== "null" && 
