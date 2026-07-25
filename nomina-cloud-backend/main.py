@@ -487,55 +487,46 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
 class CierreNominaRequest(BaseModel):
     periodo: str
     quincena: Union[int, str]
-    id_aportante: Union[str, None] = None
+    id_contrato: str
 
 
 @app.get("/api/v1/nomina/estado-cierre/{periodo}/{quincena}")
-def obtener_estado_cierre(periodo: str, quincena: str, id_aportante: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    aportante_seguro = current_user.get("id_aportante")
-    if not aportante_seguro or str(aportante_seguro) == 'None':
-        aportante_seguro = id_aportante
-
-    if not aportante_seguro:
+def obtener_estado_cierre(periodo: str, quincena: str, id_contrato: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    if not id_contrato:
         raise HTTPException(
-            status_code=400, detail="No se encontró un ID de aportante válido para la consulta.")
+            status_code=400, detail="No se encontró un ID de contrato válido para la consulta.")
 
     check = text(
-        "SELECT 1 FROM t_cierres_nomina WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena")
-    is_cerrado = db.execute(check, {"id_aportante": str(
-        aportante_seguro), "periodo": periodo, "quincena": quincena}).first() is not None
+        "SELECT 1 FROM t_cierres_nomina WHERE id_contrato = :id_contrato AND periodo_liq = :periodo AND quincena_pago = :quincena")
+    is_cerrado = db.execute(check, {"id_contrato": str(id_contrato), "periodo": periodo, "quincena": quincena}).first() is not None
     return {"cerrado": is_cerrado}
 
 
 @app.post("/api/v1/nomina/cerrar")
 def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    aportante_seguro = current_user.get("id_aportante")
-    if not aportante_seguro or str(aportante_seguro) == 'None':
-        aportante_seguro = payload.id_aportante
-
-    if not aportante_seguro:
+    if not payload.id_contrato:
         raise HTTPException(
-            status_code=400, detail="No se encontró un ID de aportante válido para el cierre.")
+            status_code=400, detail="No se encontró un ID de contrato válido para el cierre.")
 
-    id_aportante_str = str(aportante_seguro)
+    id_contrato_str = str(payload.id_contrato).strip()
     email = current_user.get("email", "desconocido")
     if email != "desconocido":
         email = email.lower().strip()
 
     check = text(
-        "SELECT 1 FROM t_cierres_nomina WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena")
+        "SELECT 1 FROM t_cierres_nomina WHERE id_contrato = :id_contrato AND periodo_liq = :periodo AND quincena_pago = :quincena")
     quincena_str = str(payload.quincena).strip()
 
-    if db.execute(check, {"id_aportante": id_aportante_str, "periodo": payload.periodo, "quincena": quincena_str}).first():
+    if db.execute(check, {"id_contrato": id_contrato_str, "periodo": payload.periodo, "quincena": quincena_str}).first():
         raise HTTPException(
             status_code=400, detail="La nómina ya está cerrada.")
 
     try:
         insert = text("""
-            INSERT INTO t_cierres_nomina (id_aportante, periodo_liq, quincena_pago, cerrado_por)
-            VALUES (:id_aportante, :periodo, :quincena, :email)
+            INSERT INTO t_cierres_nomina (id_contrato, periodo_liq, quincena_pago, cerrado_por)
+            VALUES (:id_contrato, :periodo, :quincena, :email)
         """)
-        db.execute(insert, {"id_aportante": id_aportante_str,
+        db.execute(insert, {"id_contrato": id_contrato_str,
                    "periodo": payload.periodo, "quincena": quincena_str, "email": email})
         db.commit()
         return {"status": "success", "message": "Nómina cerrada exitosamente."}
@@ -1227,13 +1218,16 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
     periodo_check = str(df_entrada.iloc[0]['PERIODO_LIQ']).strip()
     quincena_check = str(df_entrada.iloc[0]['QUINCENA_PAGO']).strip()
 
-    check_cierre_query = text("""
-        SELECT 1 FROM t_cierres_nomina
-        WHERE id_aportante = :id_aportante AND periodo_liq = :periodo AND quincena_pago = :quincena
-    """)
-    if db.execute(check_cierre_query, {"id_aportante": id_aportante, "periodo": periodo_check, "quincena": quincena_check}).first():
-        raise HTTPException(
-            status_code=400, detail="La nómina de este periodo se encuentra en estado CERRADO y sus datos no pueden ser alterados. Por favor, comuníquese con la línea de atención.")
+    contratos_afectados = df_entrada['ID_CONTRATO'].dropna().unique().tolist()
+    if contratos_afectados:
+        contratos_sql = ', '.join([f"'{str(c)}'" for c in contratos_afectados])
+        check_cierre_query = text(f"""
+            SELECT 1 FROM t_cierres_nomina
+            WHERE id_contrato IN ({contratos_sql}) AND periodo_liq = :periodo AND quincena_pago = :quincena
+        """)
+        if db.execute(check_cierre_query, {"periodo": periodo_check, "quincena": quincena_check}).first():
+            raise HTTPException(
+                status_code=403, detail="Operación denegada. La nómina para este periodo ya se encuentra CERRADA y es inmutable.")
 
     # 2. Limpieza de entrada: Solo registros únicos por contrato
     if 'ID_CONTRATO' not in df_entrada.columns:
@@ -1345,14 +1339,7 @@ def obtener_historico(aportante_id: str = None, current_user: dict = Depends(get
             raise ValueError(
                 "No se detectó un id_aportante para consultar. Si eres SuperAdmin, debes seleccionar una empresa primero.")
 
-        # 1. Traer los periodos que ya están cerrados (Esta tabla SÍ tiene id_aportante)
-        cierres_res = supabase_client.table('t_cierres_nomina').select(
-            'periodo_liq, quincena_pago').eq('id_aportante', id_aportante_final).execute()
-        cierres_data = cierres_res.data if cierres_res.data else []
-        cierres_set = {
-            f"{c['periodo_liq']}-{c['quincena_pago']}" for c in cierres_data}
-
-        # 2. Consultar m_empleados para obtener los contratos de esta empresa
+        # 1. Consultar m_empleados para obtener los contratos de esta empresa
         empleados_res = supabase_client.table('m_empleados').select(
             'id_contrato, nombre_empleado, cargo').eq('id_aportante', id_aportante_final).execute()
         empleados_data = empleados_res.data if empleados_res.data else []
@@ -1362,6 +1349,13 @@ def obtener_historico(aportante_id: str = None, current_user: dict = Depends(get
         # Si la empresa no tiene empleados, devolvemos lista vacía inmediatamente
         if not contratos:
             return []
+
+        # 2. Traer los periodos que ya están cerrados usando id_contrato
+        cierres_res = supabase_client.table('t_cierres_nomina').select(
+            'periodo_liq, quincena_pago, id_contrato').in_('id_contrato', contratos).execute()
+        cierres_data = cierres_res.data if cierres_res.data else []
+        cierres_set = {
+            f"{c['periodo_liq']}-{c['quincena_pago']}" for c in cierres_data}
 
         # 3. Traer la actividad de t_novedades filtrando por la lista de contratos
         novedades_res = supabase_client.table('t_novedades').select(
