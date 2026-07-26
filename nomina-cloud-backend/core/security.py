@@ -1,4 +1,5 @@
 import os
+import logging
 import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from supabase import create_client, Client
 
+logger = logging.getLogger("uvicorn")
+
 load_dotenv(".env.local")
 load_dotenv(".env")
 
@@ -16,7 +19,7 @@ SUPABASE_ANON_KEY = os.getenv(
     "SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-    print("ADVERTENCIA: SUPABASE_URL o SUPABASE_ANON_KEY no definidos.")
+    logger.error("ADVERTENCIA: SUPABASE_URL o SUPABASE_ANON_KEY no definidos.")
 else:
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
@@ -46,9 +49,9 @@ async def get_current_user_unblocked(
         if user_email:
             user_email = user_email.lower().strip()
 
-        print("\n==== AUDITORÍA DE AUTH EN REQUISICIÓN ====")
-        print(f"ID extraído del JWT (sub): {user_id}")
-        print(f"Email extraído del JWT: {user_email}")
+        logger.info("\n==== AUDITORÍA DE AUTH EN REQUISICIÓN ====")
+        logger.info(f"ID extraído del JWT (sub): {user_id}")
+        logger.info(f"Email extraído del JWT: {user_email}")
 
         if not user_id or not user_email:
             raise HTTPException(
@@ -65,19 +68,19 @@ async def get_current_user_unblocked(
         perfil_id_aportante = None
         
         if not perfil_result:
-            print(f"[AUTH] ⚠️ Perfil no encontrado para {user_id}. Creando perfil por defecto (Empleador)...")
+            logger.info(f"[AUTH] ⚠️ Perfil no encontrado para {user_id}. Creando perfil por defecto (Empleador)...")
             try:
                 insert_perfil = text("INSERT INTO m_perfiles (id, rol) VALUES (:user_id, 'Empleador')")
                 db.execute(insert_perfil, {"user_id": user_id})
                 db.commit()
             except Exception as e:
                 db.rollback()
-                print(f"[AUTH ERROR] No se pudo crear el perfil en m_perfiles: {e}")
+                logger.error(f"[AUTH ERROR] No se pudo crear el perfil en m_perfiles: {e}")
         else:
             rol_asignado = perfil_result["rol"]
             perfil_id_aportante = perfil_result.get("id_aportante")
 
-        print(f"Resultado en m_perfiles: Rol asignado -> {rol_asignado}, id_aportante -> {perfil_id_aportante}")
+        logger.info(f"Resultado en m_perfiles: Rol asignado -> {rol_asignado}, id_aportante -> {perfil_id_aportante}")
 
         if rol_asignado == "SuperAdmin":
             return {
@@ -106,10 +109,11 @@ async def get_current_user_unblocked(
                     db.commit()
                 except Exception as e:
                     db.rollback()
+                    logger.warning(f"[AUTH WARNING] No se pudo actualizar m_perfiles: {e}")
 
-        print(f"Resultado en m_aportantes (Cliente): {dict(result) if result else 'Ninguno'}")
+        logger.info(f"Resultado en m_aportantes (Cliente): {dict(result) if result else 'Ninguno'}")
         if not result:
-            print(
+            logger.info(
                 "[AUTH] ⚠️ Aportante no encontrado localmente. Consultando API de Wolkvox (JiT)...")
             # Paso C: Aprovisionamiento JIT desde Wolkvox
             wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
@@ -144,7 +148,7 @@ async def get_current_user_unblocked(
                         response_upper.raise_for_status()
                         data_contactos = response_upper.json()
             except Exception as e:
-                print(f"==== ERROR WOLKVOX JIT: {str(e)} ====")
+                logger.error(f"==== ERROR WOLKVOX JIT: {str(e)} ====")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="No encontramos tu correo en nuestro sistema. Por favor, comunícate al Tel. 333 6025560 para brindarte atención."
@@ -175,7 +179,7 @@ async def get_current_user_unblocked(
                 db.commit()
             except Exception as e:
                 db.rollback()
-                print(f"==== ERROR HACIENDO UPSERT EN SUPABASE JIT O ACTUALIZANDO PERFIL: {str(e)} ====")
+                logger.error(f"==== ERROR HACIENDO UPSERT EN SUPABASE JIT O ACTUALIZANDO PERFIL: {str(e)} ====")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Error al registrar al usuario en el sistema local."
@@ -193,13 +197,13 @@ async def get_current_user_unblocked(
                     "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
                 }
                 await obtener_empleados_por_empleador(id_contacto=rut_empleador, current_user=mock_user, db=db)
-                print(f"[AUTH] ✅ Sincronización en cascada de empleados finalizada para {rut_empleador}.")
+                logger.info(f"[AUTH] ✅ Sincronización en cascada de empleados finalizada para {rut_empleador}.")
             except Exception as sync_e:
-                print(f"==== ERROR SYNC EMPLEADOS EN LOGIN: {str(sync_e)} ====")
+                logger.error(f"==== ERROR SYNC EMPLEADOS EN LOGIN: {str(sync_e)} ====")
 
             return mock_user
 
-        print(
+        logger.info(
             "[AUTH] ✅ Aportante encontrado en Caché Local (Supabase). Evitando llamada a Wolkvox.")
         return {
             "rol": "Empleador",
@@ -213,7 +217,7 @@ async def get_current_user_unblocked(
         # If it's already an HTTPException, re-raise it so the detail is preserved
         if isinstance(e, HTTPException):
             raise e
-        print(f"==== ERROR AUTH SDK: {str(e)} ====")
+        logger.error(f"==== ERROR AUTH SDK: {str(e)} ====")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Tu sesión ha expirado o es inválida. Por favor, inicia sesión nuevamente o comunícate al Tel. 333 6025560 si el problema persiste.",

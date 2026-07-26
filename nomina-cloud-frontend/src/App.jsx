@@ -50,7 +50,6 @@ function App() {
     } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       // 1. Manejo de caducidad crítica
       if (event === "SIGNED_OUT" || event === "TOKEN_REFRESH_FAILED") {
-        console.log("Sesión finalizada o token expirado.");
         setSession(null);
         localStorage.clear();
         return;
@@ -64,9 +63,6 @@ function App() {
 
       // Si estamos en cuarentena y esta es la pestaña vieja (Login), CONGELAMOS EL ESTADO
       if (enCuarentena && !esRutaRecuperacion) {
-        console.log(
-          "Pestaña original bloqueada temporalmente por flujo de recuperación en curso.",
-        );
         setSession(null);
         return; // Interrumpe el flujo, evitando que pase al Dashboard
       }
@@ -704,6 +700,13 @@ function App() {
     }
   };
 
+  /**
+   * UI de Nómina - Regla de Promise Chaining:
+   * Un solo botón de "Guardar y Descargar Desprendible" que ejecuta en cadena:
+   * 1) Guardado del histórico de nómina en el backend.
+   * 2) Generación y descarga del PDF solo tras completar el guardado con éxito.
+   * Si la nómina está en estado CERRADA, el botón desaparece y se muestra un mensaje estático.
+   */
   const handleGuardarYDescargar = async () => {
     if (!resultado) return;
     setIsSaving(true);
@@ -826,6 +829,12 @@ function App() {
     }
   };
 
+  /**
+   * Seguridad de Sesión - Regla de Logout:
+   * La acción de Logout NUNCA debe lanzar peticiones HTTP POST/PUT al backend
+   * (prohibido guardar al morir / unmount). Solo destruye la sesión localmente
+   * con supabase.auth.signOut() y limpiando tokens locales.
+   */
   const handleLogout = async () => {
     await supabase.auth.signOut();
     window.location.href = '/login';

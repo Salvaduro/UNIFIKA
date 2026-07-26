@@ -91,6 +91,10 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
     """
     Función reutilizable para extraer empleados desde Wolkvox y hacer el upsert profundo de 28 columnas a m_empleados.
     Si target_empleado_id está presente, se filtra y procesa únicamente ese empleado.
+
+    Regla de Negocio (Soft-Delete de Wolkvox):
+    - NUNCA aplicar Hard-Delete a un empleado que ya no viene en Wolkvox (estado "lost").
+    - Se aplica Soft-Delete cambiando estado_empleado = 'RETIRADO' (de lo contrario se asigna 'ACTIVO').
     """
     id_aportante = str(id_aportante)
     if target_empleado_id is not None:
@@ -310,7 +314,6 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
             except Exception as e:
                 db.rollback()
                 logger.error(f"[ERROR-SYNC-EMPLEADOS] Detalle: {str(e)}")
-                print(f"[SYNC ERROR] Error guardando empleado {id_empleado_str}: {str(e)}")
                 
         if target_empleado_id and not empleados_limpios:
             raise HTTPException(status_code=404, detail="El empleado no se encontró en las oportunidades del contacto.")

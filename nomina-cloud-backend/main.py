@@ -2,8 +2,7 @@ import pandas as pd
 import math
 import datetime
 import os
-import unicodedata
-import traceback
+import logging
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from fastapi.responses import Response
@@ -20,6 +19,8 @@ from dotenv import load_dotenv
 
 load_dotenv(".env.local")
 load_dotenv(".env")
+
+logger = logging.getLogger("uvicorn")
 
 # NO BORRAR: Requerido por el motor matemático
 import numpy as np
@@ -261,6 +262,11 @@ def obtener_ultimo_dias_laborados(id_contrato: str, db: Session = Depends(get_db
 async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Endpoint (Proxy) para obtener todos los empleados de un empleador con Caché en Supabase y JiT Fallback en cascada.
+
+    Reglas de Negocio - Sincronización de Empleados y Soft-Delete (Wolkvox):
+    - Manejo de Rotación (Wolkvox): NUNCA aplicar Hard-Delete a un empleado que ya no viene en Wolkvox (estado "lost").
+    - Se aplica Soft-Delete cambiando estado_empleado = 'RETIRADO'.
+    - Un empleado en estado RETIRADO o En Mora SS no puede operar en el sistema.
     """
     if current_user.get("rol") != "SuperAdmin":
         id_contacto = current_user["id_aportante"]
@@ -273,12 +279,13 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         resultado_admin = db.execute(query_admin, {"id_aportante": id_contacto}).mappings().first()
     except Exception as e:
         db.rollback()
+        logger.warning(f"Error consulta admin en m_aportantes: {e}")
         resultado_admin = None
 
     # Paso B: JiT Fallback a Wolkvox (Contactos) si el aportante no existe
     if not resultado_admin:
         import os, httpx
-        print(f"[WOLKVOX] ⚠️ Aportante {id_contacto} no encontrado localmente. Extrayendo desde Wolkvox (JiT)...")
+        logger.info(f"[WOLKVOX] ⚠️ Aportante {id_contacto} no encontrado localmente. Extrayendo desde Wolkvox (JiT)...")
         wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
         if wolkvox_token:
             url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
@@ -312,9 +319,9 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
                                 from core.wolkvox_sync import sync_empleados_from_wolkvox
                                 await sync_empleados_from_wolkvox(id_contacto, resultado_admin.get("razon_social", id_contacto), db)
                             except Exception as e_upsert:
-                                print(f"==== ERROR UPSERT JIT Aportante: {str(e_upsert)} ====")
+                                logger.error(f"==== ERROR UPSERT JIT Aportante: {str(e_upsert)} ====")
             except Exception as e_net:
-                print(f"==== ERROR WOLKVOX JIT NETWORK: {str(e_net)} ====")
+                logger.error(f"==== ERROR WOLKVOX JIT NETWORK: {str(e_net)} ====")
 
     if not resultado_admin:
         raise HTTPException(status_code=404, detail=f"Aportante con ID {id_contacto} no encontrado en el sistema ni en el CRM.")
@@ -327,7 +334,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         query_empleados = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante AND estado_empleado != 'RETIRADO'")
         empleados_locales = db.execute(query_empleados, {"id_aportante": id_contacto}).mappings().all()
         if empleados_locales and len(empleados_locales) > 0:
-            print(f"[CACHE] ✅ {len(empleados_locales)} empleados encontrados localmente. Evitando Wolkvox.")
+            logger.info(f"[CACHE] ✅ {len(empleados_locales)} empleados encontrados localmente. Evitando Wolkvox.")
             data_local = []
             for emp in empleados_locales:
                 data_local.append({
@@ -360,9 +367,9 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
             }
     except Exception as e:
         db.rollback()
-        print(f"[CACHE ERROR] Fallo al consultar m_empleados: {str(e)}")
+        logger.error(f"[CACHE ERROR] Fallo al consultar m_empleados: {str(e)}")
 
-    print(f"[WOLKVOX] ⚠️ Empleados no encontrados localmente para {id_contacto}. Extrayendo desde Wolkvox...")
+    logger.info(f"[WOLKVOX] ⚠️ Empleados no encontrados localmente para {id_contacto}. Extrayendo desde Wolkvox...")
     
     async def _mock_fallback():
         return {
@@ -442,14 +449,15 @@ async def obtener_detalle_empleado(id_contacto: str, id_empleado: str, db: Sessi
 async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """
     Endpoint para sincronizar el detalle de un empleado específico desde Wolkvox.
+
+    Reglas de Negocio - Sincronización de Empleados y Soft-Delete (Wolkvox):
+    - Manejo de Rotación (Wolkvox): NUNCA aplicar Hard-Delete a un empleado que ya no viene en Wolkvox (estado "lost").
+    - Se aplica Soft-Delete cambiando estado_empleado = 'RETIRADO'.
+    - Un empleado en estado RETIRADO o En Mora SS no puede operar en el sistema.
     """
     if current_user.get("rol") != "SuperAdmin":
         id_contacto = current_user["id_aportante"]
         
-    wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
-    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
-    headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
-    
     id_contacto = str(id_contacto)
     id_empleado = str(id_empleado)
     cedula_real = id_empleado.split('_')[-1] if '_' in id_empleado else id_empleado
@@ -460,6 +468,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
         nombre_empleador = resultado_admin["razon_social"] if resultado_admin else id_contacto
     except Exception as e:
         db.rollback()
+        logger.warning(f"Error consultando razon_social m_aportantes: {e}")
         nombre_empleador = id_contacto
     from core.wolkvox_sync import sync_aportante_from_wolkvox, sync_empleados_from_wolkvox
     
@@ -470,8 +479,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     try:
         empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, nombre_empleador, db, target_empleado_id=cedula_real)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error sync detalle empleado {id_empleado}: {e}", exc_info=True)
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"Error sinc. Wolkvox: {str(e)}")
@@ -489,6 +497,11 @@ class CierreNominaRequest(BaseModel):
 
 @app.get("/api/v1/nomina/estado-cierre/{periodo}/{quincena}")
 def obtener_estado_cierre(periodo: str, quincena: str, id_contrato: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Regla de Negocio - Candado de Nómina (Inmutabilidad y Cierre Granular):
+    - Una nómina con estado 'CERRADA' en t_cierres_nomina es sagrada e inmutable.
+    - El candado se aplica por EMPLEADO (id_contrato), NUNCA por empresa.
+    """
     if not id_contrato:
         raise HTTPException(
             status_code=400, detail="No se encontró un ID de contrato válido para la consulta.")
@@ -501,6 +514,11 @@ def obtener_estado_cierre(periodo: str, quincena: str, id_contrato: str = None, 
 
 @app.post("/api/v1/nomina/cerrar")
 def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Regla de Negocio - Candado de Nómina (Cierre inmutable por empleado):
+    - Inserta el registro de cierre para id_contrato, periodo_liq y quincena_pago en t_cierres_nomina.
+    - Cualquier intento posterior de sobreescritura será rechazado.
+    """
     if not payload.id_contrato:
         raise HTTPException(
             status_code=400, detail="No se encontró un ID de contrato válido para el cierre.")
@@ -606,6 +624,11 @@ async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str 
 
 @app.post("/api/v1/liquidar")
 def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dict = Depends(get_current_user)):
+    """
+    Reglas de Negocio - Liquidación de Nómina y Cálculo UGPP (Tiempo Parcial / Salud):
+    - Las horas extras NO suman al IBC.
+    - Excepción única: para empleados de Tiempo Parcial que pagan EPS/salud, el IBC se fuerza obligatoriamente a 1 SMLV.
+    """
     if not payload:
         return []
 
@@ -895,6 +918,10 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
 
 @app.get("/api/v1/nomina/desprendible-pdf/{id_contrato}/{periodo_liq}/{quincena_pago}")
 def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago: str, db: Session = Depends(get_db)):
+    """
+    Regla de Infraestructura - Discos Efímeros en Render (ReportLab / PDF en Memoria):
+    - PROHIBIDO guardar archivos físicos de PDF en disco. Todo PDF debe generarse en memoria (BytesIO / bytes) y devolverse en Response.
+    """
     query = text("""
         SELECT e.*, n.*, 
                n.salario_base as salario_base_novedad,
@@ -973,7 +1000,7 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
             resultado_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
 
             return generar_comprobante(resultado_final)
-    except Exception as e:
+    except Exception:
         pass
         # Fallback si falla liquidar_nomina, aseguramos SAL_REF para evitar error en divisor
     if not row_dict.get('SAL_REF'):
@@ -984,14 +1011,16 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
 
 @app.post("/api/v1/comprobante/generar")
 def generar_comprobante(row: Dict[str, Any] = Body(...)):
+    """
+    Regla de Infraestructura - Discos Efímeros en Render (Comprobante PDF en Memoria):
+    - Genera el comprobante de nómina en memoria sin escribir en disco físico.
+    """
     HR_MES = 210
     factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
                      'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
 
     periodo_liq = formatear_periodo(row.get('PERIODO_LIQ', 'SIN PERIODO'))
     quincena_pago = str(row.get('QUINCENA_PAGO', '')).strip().upper()
-
-    id_aportante = str(row.get('ID_APORTANTE', '')).strip()
 
     if quincena_pago in ['1', 'Q1']:
         texto_periodo = f"Primera Quincena de {periodo_liq}"
@@ -1198,6 +1227,11 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
 
 @app.post("/api/v1/historico/guardar")
 def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Body(...), db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Regla de Negocio - Candado de Nómina (Inmutabilidad de Nómina y Cierre Granular):
+    - Una nómina con estado 'CERRADA' en t_cierres_nomina es sagrada e inmutable.
+    - Antes de guardar histórico, verifica que el contrato no esté en estado CERRADA. Si lo está, rechaza con HTTP 403.
+    """
     if not payload:
         return {"status": "success", "message": "No hay datos para guardar."}
 
@@ -1211,7 +1245,6 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
     if 'PERIODO_LIQ' not in df_entrada.columns or 'QUINCENA_PAGO' not in df_entrada.columns:
         return {"status": "error", "message": "El payload debe contener las claves 'PERIODO_LIQ' y 'QUINCENA_PAGO'."}
 
-    id_aportante = str(current_user.get("id_aportante"))
     periodo_check = str(df_entrada.iloc[0]['PERIODO_LIQ']).strip()
     quincena_check = str(df_entrada.iloc[0]['QUINCENA_PAGO']).strip()
 

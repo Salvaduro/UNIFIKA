@@ -6,6 +6,11 @@ export default function IdleTimer({ children }) {
   
   const TIMEOUT_MS = 900000; // 15 minutos
 
+  /**
+   * Seguridad de Sesión - Regla de Logout (Idle Timer):
+   * Cierre de sesión tras 15 minutos de inactividad. El Logout debe ser
+   * puramente local (borrado de tokens y sesión), SIN peticiones POST al backend.
+   */
   const handleLogout = async () => {
     await supabase.auth.signOut();
     localStorage.clear();
