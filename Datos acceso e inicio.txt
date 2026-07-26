@@ -1,0 +1,37 @@
+postgresql://postgres:Un1f1k4*2026@db.esruqpxrvclwjekrssom.supabase.co:5432/postgres
+
+Backend: uvicorn main:app --reload
+Frontend: npm run dev
+
+pwd -cuenta-supabase	Salva.dor2026
+	
+pww BD	Un1f1k4*2026
+
+
+## 🪬REINICIO DEL AGENTE ANTIGRAVITY IDE
+
+Método A (Reinicio de Memoria / Nuevo Chat): En el panel lateral donde chateas con Antigravity, busca un ícono de un signo de suma (+) o un botón que diga "New Chat" / "Clear Chat". Al presionarlo, el agente borra todo el historial de esa conversación y empieza con la mente en blanco, listo para una nueva tarea sin arrastrar errores anteriores.
+
+Método B (Reinicio Forzado del Servidor del IDE): Si sientes que el agente se "quedó colgado" o el IDE está lento, puedes reiniciar el motor interno sin cerrar la ventana. Presiona Ctrl + Shift + P (para abrir la paleta de comandos) y escribe: Reload Window (o Recargar ventana). Esto reinicia instantáneamente las extensiones y el agente.
+
+### 🗝️PROMPT INICIO ANTIGRAVITY:
+
+Contexto y Reglas de Sesión:
+Eres Antigravity, nuestro desarrollador Full-Stack IA. Yo soy el Director del Proyecto. Estamos trabajando en UNIFIKA Nómina Cloud.
+
+Antes de que comencemos con las tareas de hoy, es OBLIGATORIO que leas, proceses y asimiles las reglas de negocio y la arquitectura de estos dos archivos ubicados en la raíz del proyecto:
+
+@ANTIGRAVITY_RULES.md
+
+@CONTEXT_MAP.md
+
+Tu primera instrucción: Confírmame en una sola frase que has leído y cargado ambos archivos en tu contexto, y dime: "Contexto asimilado, Director. ¿Cuál es el objetivo de hoy?". No generes ningún código aún.
+
+### 🛩️ PARA SUBIR UN NUEVO COMMIT
+
+El "Self-Review" Forzado (Auto-revisión)
+A veces, por ir rápido, el agente borra una línea que no debía. Antes de hacer un commit o desplegar a producción, puedes pedirle a Antigravity en el IDE que revise su propio trabajo.
+
+El comando mágico: "Antigravity, ejecuta git diff de los cambios que acabas de hacer y revisa línea por línea si accidentalmente borraste alguna validación anterior o rompiste alguna regla de ANTIGRAVITY_RULES.md. Confírmame antes de hacer commit."
+
+Por qué funciona: Las IAs (especialmente Gemini 3.1 Pro) son mucho mejores criticando código ya escrito que escribiéndolo perfecto al primer intento. Al pedirle que se auto-evalúe, suele detectar sus propios errores y decirte: "Tienes razón, borré una línea accidentalmente, lo corrijo".
