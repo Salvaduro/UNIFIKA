@@ -8,6 +8,7 @@ from database import get_db
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from supabase import create_client, Client
+from models import RolUsuario
 
 logger = logging.getLogger("uvicorn")
 
@@ -24,6 +25,52 @@ else:
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 security = HTTPBearer()
+
+
+class UserContext(dict):
+    """
+    Diccionario de sesión de usuario con soporte de acceso por atributo y detección de rol VIP.
+    Compatibilidad total con el Búnker de Datos RBAC (Camino A) y ORM Multi-Tenant.
+    """
+    def __getattr__(self, item):
+        try:
+            return self[item]
+        except KeyError:
+            return None
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    @property
+    def es_vip(self) -> bool:
+        """Indica si es STAFF UNIFIKA ('ADMINISTRADOR' o 'SUPERADMIN')."""
+        rol_upper = str(self.get("rol", "")).upper().strip()
+        return rol_upper in [RolUsuario.ADMINISTRADOR.value, RolUsuario.SUPERADMIN.value]
+
+
+def filter_by_tenant(query, model, current_user: dict):
+    """
+    Inyecta el filtro Multi-Tenant (Búnker de Datos RBAC - Camino A) en consultas ORM.
+    - 'ADMINISTRADOR' y 'SUPERADMIN': Ejecutan consultas SIN el filtro de id_aportante (Puerta VIP - Soporte).
+    - 'EMPLEADOR': Inyecta obligatoriamente filtro por id_aportante en m_empleados, t_novedades y t_cierres_nomina.
+    """
+    rol = str(current_user.get("rol", "")).upper().strip()
+    if rol in [RolUsuario.ADMINISTRADOR.value, RolUsuario.SUPERADMIN.value]:
+        # Puerta VIP (Staff UNIFIKA)
+        return query
+
+    id_aportante = str(current_user.get("id_aportante", ""))
+
+    if hasattr(model, "id_aportante"):
+        return query.filter(model.id_aportante == id_aportante)
+    elif hasattr(model, "id_contrato"):
+        from models import Empleado
+        if hasattr(model, "empleado"):
+            return query.join(model.empleado).filter(Empleado.id_aportante == id_aportante)
+        else:
+            subquery = query.session.query(Empleado.id_contrato).filter(Empleado.id_aportante == id_aportante)
+            return query.filter(model.id_contrato.in_(subquery))
+    return query
 
 
 async def get_current_user_unblocked(
@@ -64,32 +111,48 @@ async def get_current_user_unblocked(
         query_perfil = text("SELECT rol, id_aportante FROM m_perfiles WHERE id = :user_id")
         perfil_result = db.execute(query_perfil, {"user_id": user_id}).mappings().first()
         
-        rol_asignado = "Empleador"
+        rol_asignado = RolUsuario.EMPLEADOR.value
         perfil_id_aportante = None
         
+        # Extracción del rol desde m_perfiles o user_metadata del token JWT
+        extracted_rol = None
+        if perfil_result and perfil_result.get("rol"):
+            extracted_rol = perfil_result["rol"]
+        elif user_response.user.user_metadata and user_response.user.user_metadata.get("rol"):
+            extracted_rol = user_response.user.user_metadata.get("rol")
+        
+        # Normalización inmediata a mayúsculas y eliminación de espacios
+        raw_rol = str(extracted_rol).upper().strip() if extracted_rol else RolUsuario.EMPLEADOR.value
+        
         if not perfil_result:
-            logger.info(f"[AUTH] ⚠️ Perfil no encontrado para {user_id}. Creando perfil por defecto (Empleador)...")
+            logger.info(f"[AUTH] ⚠️ Perfil no encontrado para {user_id}. Creando perfil por defecto ({raw_rol})...")
             try:
-                insert_perfil = text("INSERT INTO m_perfiles (id, rol) VALUES (:user_id, 'Empleador')")
-                db.execute(insert_perfil, {"user_id": user_id})
+                insert_perfil = text("INSERT INTO m_perfiles (id, rol) VALUES (:user_id, :rol)")
+                db.execute(insert_perfil, {"user_id": user_id, "rol": raw_rol})
                 db.commit()
             except Exception as e:
                 db.rollback()
                 logger.error(f"[AUTH ERROR] No se pudo crear el perfil en m_perfiles: {e}")
         else:
-            rol_asignado = perfil_result["rol"]
             perfil_id_aportante = perfil_result.get("id_aportante")
+
+        if raw_rol in [RolUsuario.SUPERADMIN.value, RolUsuario.ADMINISTRADOR.value, RolUsuario.EMPLEADOR.value]:
+            rol_asignado = raw_rol
+        else:
+            rol_asignado = RolUsuario.EMPLEADOR.value
 
         logger.info(f"Resultado en m_perfiles: Rol asignado -> {rol_asignado}, id_aportante -> {perfil_id_aportante}")
 
-        if rol_asignado == "SuperAdmin":
-            return {
-                "rol": "SuperAdmin",
-                "id_aportante": None,
+        if rol_asignado in [RolUsuario.SUPERADMIN.value, RolUsuario.ADMINISTRADOR.value]:
+            logger.info(f"[AUTH] ⭐ Usuario STAFF identificado ({rol_asignado}). Saltando validación local y en Wolkvox.")
+            return UserContext({
+                "id": user_id,
+                "rol": rol_asignado,
+                "id_aportante": perfil_id_aportante,
                 "email": user_email,
-                "razon_social": "ADMINISTRACIÓN GLOBAL",
+                "razon_social": "ADMINISTRACIÓN GLOBAL" if rol_asignado == RolUsuario.SUPERADMIN.value else "STAFF ADMINISTRATIVO",
                 "carpeta_cliente": None
-            }
+            })
 
         # Paso B: Validar Cliente (por id_aportante desde el perfil, o fallback a Email)
         result = None
@@ -162,7 +225,7 @@ async def get_current_user_unblocked(
 
             contacto_data = data_contactos["data"][0]
             estado_contacto = contacto_data.get("Estado Contacto")
-            if estado_contacto in ["RETIRADO", "UnicaAfiliacion", "En Mora SS"]:
+            if str(estado_contacto or "").upper().strip() in ["RETIRADO", "UNICAAFILIACION", "EN MORA SS"]:
                 raise HTTPException(
                     status_code=403, detail="Su cuenta presenta una novedad. Por favor comuníquese con la línea de soporte 333 6025560.")
             from core.wolkvox_sync import map_aportante_from_wolkvox
@@ -188,14 +251,15 @@ async def get_current_user_unblocked(
             # Sincronización en cascada de los empleados inmediatamente después de crear el aportante
             try:
                 from main import obtener_empleados_por_empleador
-                mock_user = {
-                    "rol": "Empleador",
+                mock_user = UserContext({
+                    "id": user_id,
+                    "rol": RolUsuario.EMPLEADOR.value,
                     "id_aportante": rut_empleador,
                     "email": str(email_crm).lower().strip() if email_crm else user_email,
                     "razon_social": nombre_empleador,
                     "estado_contacto": estado_contacto,
                     "carpeta_cliente": contacto_data.get("Carpeta Cliente", None)
-                }
+                })
                 await obtener_empleados_por_empleador(id_contacto=rut_empleador, current_user=mock_user, db=db)
                 logger.info(f"[AUTH] ✅ Sincronización en cascada de empleados finalizada para {rut_empleador}.")
             except Exception as sync_e:
@@ -205,14 +269,15 @@ async def get_current_user_unblocked(
 
         logger.info(
             "[AUTH] ✅ Aportante encontrado en Caché Local (Supabase). Evitando llamada a Wolkvox.")
-        return {
-            "rol": "Empleador",
+        return UserContext({
+            "id": user_id,
+            "rol": RolUsuario.EMPLEADOR.value,
             "id_aportante": result["id_aportante"],
             "email": user_email,
             "razon_social": result["razon_social"],
             "estado_contacto": result.get("estado_contacto"),
             "carpeta_cliente": result.get("carpeta_cliente")
-        }
+        })
     except Exception as e:
         # If it's already an HTTPException, re-raise it so the detail is preserved
         if isinstance(e, HTTPException):
@@ -228,10 +293,13 @@ async def get_current_user_unblocked(
 async def get_current_user(
     user: dict = Depends(get_current_user_unblocked)
 ):
-    if user.get("rol") == "Empleador":
-        estado_actual = str(user.get("estado_contacto", "")).upper().strip()
+    user_ctx = UserContext(user) if not isinstance(user, UserContext) else user
+    rol_upper = str(user_ctx.get("rol", "")).upper().strip()
+    user_ctx["rol"] = rol_upper
+    if rol_upper == RolUsuario.EMPLEADOR.value:
+        estado_actual = str(user_ctx.get("estado_contacto", "")).upper().strip()
         estados_restringidos = ["EN MORA SS", "RETIRADO", "UNICAAFILIACION"]
         if estado_actual in estados_restringidos:
             raise HTTPException(
-                status_code=403, detail=f"Acceso denegado. Estado de cuenta: {user.get('estado_contacto', 'Desconocido')}. Por favor, comunícate con nuestra línea de soporte al 3336025560 para reactivar tu servicio.")
-    return user
+                status_code=403, detail=f"Acceso denegado. Estado de cuenta: {user_ctx.get('estado_contacto', 'Desconocido')}. Por favor, comunícate con nuestra línea de soporte al 3336025560 para reactivar tu servicio.")
+    return user_ctx

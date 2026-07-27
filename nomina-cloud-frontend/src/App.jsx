@@ -182,13 +182,44 @@ function App() {
       setIsLoadingPerfil(true);
       setPerfilError(null);
       try {
-        // Sincronización en cascada (Sync Guard)
+        // 1. Consulta directa a m_perfiles filtrando por user.id para obtener el rol real y el id_aportante
+        let rolBD = null;
+        let idAportanteBD = null;
+        try {
+          const { data: perfilData, error: perfilErr } = await supabase
+            .from("m_perfiles")
+            .select("rol, id_aportante")
+            .eq("id", session.user.id)
+            .single();
+
+          if (!perfilErr && perfilData) {
+            if (perfilData.rol) {
+              rolBD = String(perfilData.rol).toUpperCase().trim();
+            }
+            if (perfilData.id_aportante) {
+              idAportanteBD = perfilData.id_aportante;
+            }
+          }
+        } catch (err) {
+          console.warn("Fallo en consulta directa a m_perfiles:", err);
+        }
+
+        // 2. Sincronización en cascada (Sync Guard)
         const res = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/auth/init-session`, {
           method: 'POST'
         });
         if (res.ok) {
           const { data } = await res.json();
-          setPerfilAportante(data);
+          // Normalización (Defensa de Tipos): forzar rol a mayúsculas
+          const rawRol = data?.rol || rolBD || "EMPLEADOR";
+          const normalizedRol = String(rawRol).toUpperCase().trim();
+          const normalizedIdAportante = data?.id_aportante || idAportanteBD || null;
+
+          setPerfilAportante({
+            ...data,
+            rol: normalizedRol,
+            id_aportante: normalizedIdAportante,
+          });
         } else {
           const errorData = await res.json().catch(() => ({}));
           const errorMsg =
@@ -219,7 +250,7 @@ function App() {
     if (window.location.pathname === "/actualizar-password") return;
     // Solo buscar empleados si ya tenemos certeza del usuario logueado
     if (session && session.user && perfilAportante?.id_aportante) {
-      if (perfilAportante.rol === "Empleador") {
+      if (perfilAportante.rol === "EMPLEADOR") {
         handleSearchEmpleador(perfilAportante.id_aportante);
       }
     }
@@ -350,11 +381,14 @@ function App() {
   }
 
   async function handleSearchEmpleador(aportanteId = "me", force = false) {
-    // Si no pasan ID y es SuperAdmin, usa el estado empleadorId
+    // Si no pasan ID y es ADMIN o SUPERADMIN, usa el estado empleadorId
+    const isStaff =
+      perfilAportante?.rol === "ADMINISTRADOR" ||
+      perfilAportante?.rol === "SUPERADMIN";
     const targetId = aportanteId === "me" ? empleadorId || "me" : aportanteId;
     if (
       targetId === "me" &&
-      perfilAportante?.rol === "SuperAdmin" &&
+      isStaff &&
       !empleadorId.trim()
     )
       return;
@@ -928,7 +962,9 @@ function App() {
             <div className="flex items-center space-x-4">
               <div className="text-slate-300 text-sm hidden md:block font-medium">
                 Portal de Administración{" "}
-                {perfilAportante?.rol === "SuperAdmin" ? "(SuperAdmin)" : ""}
+                {perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR"
+                  ? `(${perfilAportante.rol})`
+                  : ""}
               </div>
               <button
                 onClick={handleLogout}
@@ -937,7 +973,9 @@ function App() {
                 Cerrar Sesión
               </button>
               <div className="h-9 w-9 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-white font-semibold hover:bg-slate-600 transition-colors">
-                {perfilAportante?.rol === "SuperAdmin" ? "AD" : "EM"}
+                {perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR"
+                  ? "AD"
+                  : "EM"}
               </div>
             </div>
           </div>
@@ -1021,7 +1059,7 @@ function App() {
                     
                   return (
                     <div className="flex justify-end -mt-2 mb-2 gap-2">
-                      {(perfilAportante?.rol === "SuperAdmin" || perfilAportante?.rol === "Administrador") && (
+                      {(perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
                         <button
                           type="button"
                           onClick={(e) => handleSyncEmpleado(e, formData.ID_CONTRATO)}
@@ -1146,7 +1184,7 @@ function App() {
                       </h4>
                     </div>
 
-                    {perfilAportante?.rol === "SuperAdmin" && (
+                    {(perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
                       <div className="flex flex-col md:flex-row gap-4 mt-4 border-t border-slate-200 pt-4">
                         <div className="flex-1">
                           <input
@@ -1156,7 +1194,7 @@ function App() {
                               setEmpleadorId(e.target.value);
                               setSearchError(null);
                             }}
-                            placeholder="ID Empleador (Búsqueda SuperAdmin)"
+                            placeholder="ID Empleador (Búsqueda Administrativa / Soporte)"
                             className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary transition-all text-slate-900 outline-none"
                           />
                         </div>
@@ -1201,7 +1239,9 @@ function App() {
                       </div>
                     )}
 
-                    {isSearching && perfilAportante?.rol !== "SuperAdmin" && (
+                    {isSearching &&
+                      perfilAportante?.rol !== "SUPERADMIN" &&
+                      perfilAportante?.rol !== "ADMINISTRADOR" && (
                       <div className="flex items-center text-unifika-primary mt-2">
                         <svg
                           className="animate-spin -ml-1 mr-2 h-4 w-4"

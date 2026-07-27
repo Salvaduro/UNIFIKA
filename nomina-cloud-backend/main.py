@@ -14,7 +14,9 @@ from typing import List, Dict, Any, Union
 from database import get_db
 from pydantic import BaseModel
 import httpx
-from core.security import get_current_user, get_current_user_unblocked, supabase_client
+from core.security import get_current_user, get_current_user_unblocked, supabase_client, filter_by_tenant, UserContext
+import models
+import schemas
 from dotenv import load_dotenv
 
 load_dotenv(".env.local")
@@ -220,7 +222,7 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
     return {"estado_contacto": nuevo_estado}
 
 
-@app.get("/api/v1/perfil")
+@app.get("/api/v1/perfil", response_model=schemas.UsuarioPerfilResponse)
 async def get_perfil_usuario(current_user: dict = Depends(get_current_user)):
     return {
         "status": "success",
@@ -228,7 +230,7 @@ async def get_perfil_usuario(current_user: dict = Depends(get_current_user)):
         "user": current_user
     }
 
-@app.post("/api/v1/auth/init-session")
+@app.post("/api/v1/auth/init-session", response_model=schemas.UsuarioPerfilResponse)
 async def init_session_endpoint(current_user: dict = Depends(get_current_user_unblocked)):
     """
     Endpoint protegido para inicializar la sesión y validar el perfil (m_aportantes).
@@ -268,7 +270,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
     - Se aplica Soft-Delete cambiando estado_empleado = 'RETIRADO'.
     - Un empleado en estado RETIRADO o En Mora SS no puede operar en el sistema.
     """
-    if current_user.get("rol") != "SuperAdmin":
+    if not getattr(current_user, "es_vip", False) and str(current_user.get("rol", "")).upper() not in [models.RolUsuario.SUPERADMIN.value, models.RolUsuario.ADMINISTRADOR.value]:
         id_contacto = current_user["id_aportante"]
     
     id_contacto = str(id_contacto)
@@ -407,7 +409,7 @@ async def obtener_detalle_empleado(id_contacto: str, id_empleado: str, db: Sessi
     """
     Endpoint para traer el detalle de un empleado específico desde la caché local (Supabase).
     """
-    if current_user.get("rol") != "SuperAdmin":
+    if not getattr(current_user, "es_vip", False) and str(current_user.get("rol", "")).upper() not in [models.RolUsuario.SUPERADMIN.value, models.RolUsuario.ADMINISTRADOR.value]:
         id_contacto = current_user["id_aportante"]
         
     query_emp = text("SELECT * FROM m_empleados WHERE id_aportante = :id_aportante AND id_contrato = :id_contrato")
@@ -455,7 +457,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     - Se aplica Soft-Delete cambiando estado_empleado = 'RETIRADO'.
     - Un empleado en estado RETIRADO o En Mora SS no puede operar en el sistema.
     """
-    if current_user.get("rol") != "SuperAdmin":
+    if not getattr(current_user, "es_vip", False) and str(current_user.get("rol", "")).upper() not in [models.RolUsuario.SUPERADMIN.value, models.RolUsuario.ADMINISTRADOR.value]:
         id_contacto = current_user["id_aportante"]
         
     id_contacto = str(id_contacto)
@@ -506,6 +508,11 @@ def obtener_estado_cierre(periodo: str, quincena: str, id_contrato: str = None, 
         raise HTTPException(
             status_code=400, detail="No se encontró un ID de contrato válido para la consulta.")
 
+    if not getattr(current_user, "es_vip", False) and str(current_user.get("rol", "")).upper() == models.RolUsuario.EMPLEADOR.value:
+        check_emp = text("SELECT 1 FROM m_empleados WHERE id_contrato = :id_contrato AND id_aportante = :id_aportante")
+        if not db.execute(check_emp, {"id_contrato": str(id_contrato), "id_aportante": str(current_user["id_aportante"])}).first():
+            raise HTTPException(status_code=403, detail="Acceso denegado: el contrato consultado no pertenece a su empresa (Multi-Tenant).")
+
     check = text(
         "SELECT 1 FROM t_cierres_nomina WHERE id_contrato = :id_contrato AND periodo_liq = :periodo AND quincena_pago = :quincena")
     is_cerrado = db.execute(check, {"id_contrato": str(id_contrato), "periodo": periodo, "quincena": quincena}).first() is not None
@@ -524,6 +531,11 @@ def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), c
             status_code=400, detail="No se encontró un ID de contrato válido para el cierre.")
 
     id_contrato_str = str(payload.id_contrato).strip()
+    if not getattr(current_user, "es_vip", False) and str(current_user.get("rol", "")).upper() == models.RolUsuario.EMPLEADOR.value:
+        check_emp = text("SELECT 1 FROM m_empleados WHERE id_contrato = :id_contrato AND id_aportante = :id_aportante")
+        if not db.execute(check_emp, {"id_contrato": id_contrato_str, "id_aportante": str(current_user["id_aportante"])}).first():
+            raise HTTPException(status_code=403, detail="Acceso denegado: el contrato que intenta cerrar no pertenece a su empresa (Multi-Tenant).")
+
     email = current_user.get("email", "desconocido")
     if email != "desconocido":
         email = email.lower().strip()
@@ -552,9 +564,10 @@ def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), c
 
 @app.get("/api/v1/nomina/resumen/{periodo}/{quincena}")
 async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    aportante_seguro = current_user.get("id_aportante")
-    if not aportante_seguro or str(aportante_seguro) == 'None':
-        aportante_seguro = id_aportante
+    if getattr(current_user, "es_vip", False) or str(current_user.get("rol", "")).upper() in [models.RolUsuario.SUPERADMIN.value, models.RolUsuario.ADMINISTRADOR.value]:
+        aportante_seguro = id_aportante or current_user.get("id_aportante")
+    else:
+        aportante_seguro = current_user.get("id_aportante")
 
     if not aportante_seguro:
         raise HTTPException(
@@ -1361,36 +1374,50 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
 
 
 @app.get("/api/v1/nomina/periodos-historico")
-def obtener_historico(aportante_id: str = None, current_user: dict = Depends(get_current_user)):
+def obtener_historico(aportante_id: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     try:
-        id_aportante_final = aportante_id or current_user.get("id_aportante")
+        if getattr(current_user, "es_vip", False) or str(current_user.get("rol", "")).upper() in [models.RolUsuario.SUPERADMIN.value, models.RolUsuario.ADMINISTRADOR.value]:
+            id_aportante_final = aportante_id or current_user.get("id_aportante")
+        else:
+            id_aportante_final = current_user.get("id_aportante")
 
         if not id_aportante_final or str(id_aportante_final) == 'None':
             raise ValueError(
-                "No se detectó un id_aportante para consultar. Si eres SuperAdmin, debes seleccionar una empresa primero.")
+                "No se detectó un id_aportante para consultar. Si eres STAFF UNIFIKA (SuperAdmin o Administrador), debes seleccionar una empresa primero.")
 
-        # 1. Consultar m_empleados para obtener los contratos de esta empresa
-        empleados_res = supabase_client.table('m_empleados').select(
-            'id_contrato, nombre_empleado, cargo').eq('id_aportante', id_aportante_final).execute()
-        empleados_data = empleados_res.data if empleados_res.data else []
-        contratos = [emp['id_contrato'] for emp in empleados_data]
-        empleados_dict = {emp['id_contrato']: emp for emp in empleados_data}
+        # 1. Consultar m_empleados para obtener los contratos de esta empresa usando SQLAlchemy
+        query_empleados = text("""
+            SELECT id_contrato, nombre_empleado, cargo
+            FROM m_empleados
+            WHERE id_aportante = :id_aportante
+        """)
+        empleados_data = db.execute(query_empleados, {"id_aportante": str(id_aportante_final)}).mappings().all()
+        contratos = [str(emp['id_contrato']) for emp in empleados_data if emp.get('id_contrato')]
+        empleados_dict = {str(emp['id_contrato']): dict(emp) for emp in empleados_data if emp.get('id_contrato')}
 
         # Si la empresa no tiene empleados, devolvemos lista vacía inmediatamente
         if not contratos:
             return []
 
         # 2. Traer los periodos que ya están cerrados usando id_contrato
-        cierres_res = supabase_client.table('t_cierres_nomina').select(
-            'periodo_liq, quincena_pago, id_contrato').in_('id_contrato', contratos).execute()
-        cierres_data = cierres_res.data if cierres_res.data else []
+        contratos_limpios = [str(c).replace("'", "''") for c in contratos]
+        contratos_sql = ', '.join([f"'{c}'" for c in contratos_limpios])
+        query_cierres = text(f"""
+            SELECT periodo_liq, quincena_pago, id_contrato
+            FROM t_cierres_nomina
+            WHERE id_contrato IN ({contratos_sql})
+        """)
+        cierres_data = db.execute(query_cierres).mappings().all()
         cierres_set = {
             f"{c['periodo_liq']}-{c['quincena_pago']}" for c in cierres_data}
 
         # 3. Traer la actividad de t_novedades filtrando por la lista de contratos
-        novedades_res = supabase_client.table('t_novedades').select(
-            'periodo_liq, quincena_pago, id_contrato').in_('id_contrato', contratos).execute()
-        novedades_data = novedades_res.data if novedades_res.data else []
+        query_novedades = text(f"""
+            SELECT periodo_liq, quincena_pago, id_contrato
+            FROM t_novedades
+            WHERE id_contrato IN ({contratos_sql})
+        """)
+        novedades_data = db.execute(query_novedades).mappings().all()
 
         # 4. Agrupar periodos únicos y asignar estado
         periodos_unicos = {}
@@ -1405,7 +1432,7 @@ def obtener_historico(aportante_id: str = None, current_user: dict = Depends(get
                     "empleados": []
                 }
 
-            id_c = nov.get("id_contrato")
+            id_c = str(nov.get("id_contrato", ""))
             emp_info = empleados_dict.get(id_c, {})
             periodos_unicos[key]["empleados"].append({
                 "id_contrato": id_c,
@@ -1422,7 +1449,7 @@ def obtener_historico(aportante_id: str = None, current_user: dict = Depends(get
 
         def obtener_llave_ordenamiento(item):
             # item['periodo_liq'] suele ser "MES AÑO" (ej: "JUNIO 2026")
-            partes = item['periodo_liq'].upper().strip().split()
+            partes = str(item['periodo_liq']).upper().strip().split()
 
             # Extraer año (si viene en el string, si no, asume 0)
             anio = int(partes[1]) if len(
