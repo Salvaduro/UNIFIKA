@@ -32,13 +32,10 @@ export default function ResumenNomina({
         const json = await res.json();
         setData(json);
 
-        // Fetch closure status
-        const closureUrl = `${import.meta.env.VITE_API_URL}/api/v1/nomina/estado-cierre/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}${idQuery}`;
-        const closureRes = await apiClient(closureUrl);
-        if (closureRes.ok) {
-          const closureData = await closureRes.json();
-          setIsCerrado(closureData.cerrado);
-        }
+        const cerrado = Boolean(
+          json?.totales?.todos_cerrados || (json?.totales?.total_cerrados > 0)
+        );
+        setIsCerrado(cerrado);
       } catch (error) {
         console.error(error);
         const detail = error.response?.data?.detail || error.message || "Error desconocido al cargar el resumen";
@@ -255,6 +252,11 @@ export default function ResumenNomina({
                       >
                         {emp.estado}
                       </span>
+                      {(emp.esta_cerrado || isCerrado) && (
+                        <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs font-semibold border border-slate-200">
+                          🔒 Cerrado
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-4 font-medium text-slate-800">
@@ -276,8 +278,26 @@ export default function ResumenNomina({
         </div>
       </div>
 
-      {/* Botón de Cierre */}
-      {!isCerrado && (
+      {/* Botón de Cierre o Mensaje de Inmutabilidad */}
+      {isCerrado ? (
+        <div className="flex justify-center pt-4 pb-12">
+          <div className="bg-amber-50 border-l-4 border-amber-500 p-6 rounded-xl shadow-sm text-amber-900 max-w-2xl w-full flex items-center gap-4">
+            <div className="p-2 bg-amber-100 rounded-full text-amber-700">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+              </svg>
+            </div>
+            <div>
+              <p className="font-bold text-base mb-1">
+                Nómina Cerrada e Inmutable
+              </p>
+              <p className="text-sm text-amber-800">
+                Esta nómina ya se encuentra CERRADA y no puede ser modificada. Puede consultar o descargar los desprendibles en el historial.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
         <div className="flex justify-center pt-6 pb-12">
           <button
             type="button"
@@ -315,6 +335,22 @@ export default function ResumenNomina({
                   }
 
                   setIsCerrado(true);
+                  setData((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          totales: {
+                            ...prev.totales,
+                            todos_cerrados: true,
+                            total_cerrados: prev.empleados.length,
+                          },
+                          empleados: prev.empleados.map((e) => ({
+                            ...e,
+                            esta_cerrado: true,
+                          })),
+                        }
+                      : prev
+                  );
                   alert("Nóminas cerradas exitosamente.");
                 } catch (error) {
                   const detail = error.response?.data?.detail || error.message || "Error desconocido al cerrar la nómina";

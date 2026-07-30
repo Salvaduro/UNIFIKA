@@ -578,12 +578,17 @@ async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str 
     query = text("""
         SELECT 
             e.id_contrato, e.nombre_empleado, e.cargo, e.tipo_contrato,
-            n.neto_pagar, n.total_devengado, n.total_deducido
+            n.neto_pagar, n.total_devengado, n.total_deducido,
+            CASE WHEN c.id_cierre IS NOT NULL THEN TRUE ELSE FALSE END AS esta_cerrado
         FROM m_empleados e
         LEFT JOIN t_novedades n 
             ON e.id_contrato = n.id_contrato 
             AND n.periodo_liq = :periodo 
             AND n.quincena_pago = :quincena
+        LEFT JOIN t_cierres_nomina c 
+            ON e.id_contrato = c.id_contrato 
+            AND c.periodo_liq = :periodo 
+            AND c.quincena_pago = :quincena
         WHERE e.id_aportante = :id_aportante
           AND UPPER(e.estado_empleado) = 'ACTIVO'
     """)
@@ -619,8 +624,13 @@ async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str 
             "cargo": row["cargo"] or "",
             "tipo_contrato": row["tipo_contrato"] or "",
             "estado": estado,
-            "neto_pagar": neto
+            "neto_pagar": neto,
+            "esta_cerrado": bool(row["esta_cerrado"])
         })
+
+    total_cerrados = sum(1 for e in resumen_empleados if e["esta_cerrado"])
+    total_empleados = len(resultado)
+    todos_cerrados = (total_cerrados > 0 and total_cerrados == total_empleados) or (total_cerrados > 0)
 
     return {
         "status": "success",
@@ -628,8 +638,10 @@ async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str 
             "total_empresa_devengado": total_empresa_devengado,
             "total_empresa_deducido": total_empresa_deducido,
             "total_empresa_neto": total_empresa_neto,
-            "total_empleados": len(resultado),
-            "empleados_pendientes": sum(1 for e in resumen_empleados if e["estado"] == "PENDIENTE")
+            "total_empleados": total_empleados,
+            "empleados_pendientes": sum(1 for e in resumen_empleados if e["estado"] == "PENDIENTE"),
+            "total_cerrados": total_cerrados,
+            "todos_cerrados": todos_cerrados
         },
         "empleados": resumen_empleados
     }
