@@ -477,19 +477,68 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     # Paso A, B y C: Forzar la sincronización del aportante (Contacto) para capturar legacy data (carpeta_cliente)
     await sync_aportante_from_wolkvox(id_contacto, db)
     
-    # Paso 3: Mantener cascada
+    # Paso 3: Mantener cascada (Actualización Completa y Filtro Local Seguro)
     try:
-        empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, nombre_empleador, db, target_empleado_id=cedula_real)
+        # 1. Sincronizamos TODOS los empleados sin el target_empleado_id para evitar que Wolkvox rompa el filtro
+        empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, nombre_empleador, db)
+        
+        # 2. Filtramos localmente el empleado específico buscando coincidencia exacta con ID_CONTRATO
+        empleado_target = next((emp for emp in (empleados_limpios or []) if emp.get("ID_CONTRATO") == id_empleado), None)
+        
     except Exception as e:
         logger.error(f"Error sync detalle empleado {id_empleado}: {e}", exc_info=True)
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=500, detail=f"Error sinc. Wolkvox: {str(e)}")
 
+    if not empleado_target:
+        raise HTTPException(status_code=404, detail="El empleado no fue encontrado en el CRM tras la sincronización.")
+
     return {
         "status": "success",
-        "data": empleados_limpios[0] if empleados_limpios else None
+        "data": empleado_target
     }
+
+
+@app.post("/api/v1/empleador/{id_contacto}/sync-masivo")
+async def sincronizar_masivo_empleador(id_contacto: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint de Sincronización Masiva:
+    Evade la caché local de Supabase (m_empleados) y fuerza la consulta y sincronización de:
+    1) El aportante (sync_aportante_from_wolkvox) para actualizar estado (mora, retiro, etc.).
+    2) La plantilla completa de empleados (sync_empleados_from_wolkvox) sin target_empleado_id.
+    """
+    if not getattr(current_user, "es_vip", False) and str(current_user.get("rol", "")).upper() not in [models.RolUsuario.SUPERADMIN.value, models.RolUsuario.ADMINISTRADOR.value]:
+        id_contacto = str(current_user.get("id_aportante"))
+
+    id_contacto = str(id_contacto).strip()
+
+    from core.wolkvox_sync import sync_aportante_from_wolkvox, sync_empleados_from_wolkvox
+
+    try:
+        aportante_info = await sync_aportante_from_wolkvox(id_contacto, db)
+    except Exception as e:
+        logger.warning(f"Advertencia al sincronizar aportante {id_contacto}: {e}")
+        aportante_info = None
+
+    if aportante_info and aportante_info.get("razon_social"):
+        razon_social = aportante_info.get("razon_social")
+    else:
+        q_admin = text("SELECT razon_social FROM m_aportantes WHERE id_aportante = :id_aportante LIMIT 1")
+        row = db.execute(q_admin, {"id_aportante": id_contacto}).mappings().first()
+        razon_social = row["razon_social"] if row and row["razon_social"] else id_contacto
+
+    try:
+        empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, razon_social, db)
+    except Exception as e:
+        logger.error(f"Error en sync-masivo para empleador {id_contacto}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error en sincronización masiva desde Wolkvox: {str(e)}")
+
+    return {
+        "status": "success",
+        "data": empleados_limpios
+    }
+
 
 class CierreNominaRequest(BaseModel):
     periodo: str
@@ -557,6 +606,40 @@ def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), c
                    "periodo": payload.periodo, "quincena": quincena_str, "email": email})
         db.commit()
         return {"status": "success", "message": "Nómina cerrada exitosamente."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/nomina/reabrir")
+def reabrir_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint de Reapertura (Override):
+    Permite a un usuario con rol SUPERADMIN o ADMINISTRADOR anular el candado de inmutabilidad
+    y reabrir una nómina cerrada eliminando el registro en t_cierres_nomina.
+    """
+    rol = str(current_user.get("rol", "")).upper().strip()
+    if rol not in ["SUPERADMIN", "ADMINISTRADOR"]:
+        raise HTTPException(status_code=403, detail="Acceso denegado: solo SUPERADMIN o ADMINISTRADOR pueden reabrir nóminas cerradas.")
+
+    email = str(current_user.get("email", "desconocido")).lower().strip()
+    id_contrato_str = str(payload.id_contrato).strip()
+    periodo_str = str(payload.periodo).strip()
+    quincena_str = str(payload.quincena).strip()
+
+    try:
+        del_query = text("""
+            DELETE FROM t_cierres_nomina
+            WHERE id_contrato = :id_contrato AND periodo_liq = :periodo AND quincena_pago = :quincena
+        """)
+        db.execute(del_query, {
+            "id_contrato": id_contrato_str,
+            "periodo": periodo_str,
+            "quincena": quincena_str
+        })
+        db.commit()
+        logger.info(f"AUDITORÍA OVERRIDE: El usuario {email} ha reabierto la nómina del contrato {id_contrato_str} para el periodo {periodo_str} {quincena_str}")
+        return {"status": "success", "message": "Nómina reabierta exitosamente."}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

@@ -6,12 +6,14 @@ export default function ResumenNomina({
   quincena,
   idAportante,
   onRowClick,
+  perfilAportante,
 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isCerrado, setIsCerrado] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+  const [isReopening, setIsReopening] = useState(false);
 
   useEffect(() => {
     if (!periodo || !quincena) return;
@@ -109,6 +111,83 @@ export default function ResumenNomina({
     if (c === "2" || c === "Q2") return "Segunda Quincena";
     if (c === "M" || c === "MENSUAL") return "Mensualidad";
     return `Ciclo ${ciclo}`;
+  };
+
+  const handleReabrirNomina = async () => {
+    if (
+      !window.confirm(
+        "¿Estás seguro de reabrir esta nómina? Esto anulará la inmutabilidad para el personal de este periodo y quincena."
+      )
+    ) {
+      return;
+    }
+
+    if (!empleados || empleados.length === 0) {
+      alert("No hay empleados en este resumen para reabrir.");
+      return;
+    }
+
+    setIsReopening(true);
+    try {
+      for (const emp of empleados) {
+        const payload = {
+          periodo: String(periodo).toUpperCase().trim(),
+          quincena: String(quincena).trim(),
+          id_contrato: emp.id_contrato,
+        };
+
+        const response = await apiClient(
+          `${import.meta.env.VITE_API_URL}/api/v1/nomina/reabrir`,
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+
+        if (!response.ok) {
+          let errData = {};
+          try {
+            errData = await response.json();
+          } catch (e) {}
+          const errorObj = new Error(errData.detail || "Error al reabrir la nómina");
+          errorObj.response = { data: errData };
+          throw errorObj;
+        }
+      }
+
+      setIsCerrado(false);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              totales: {
+                ...prev.totales,
+                todos_cerrados: false,
+                total_cerrados: 0,
+              },
+              empleados: prev.empleados.map((e) => ({
+                ...e,
+                esta_cerrado: false,
+              })),
+            }
+          : prev
+      );
+      alert("Nómina reabierta exitosamente.");
+    } catch (error) {
+      console.error("Error al reabrir nómina:", error);
+      const detail =
+        error.response?.data?.detail ||
+        error.message ||
+        "Error desconocido al reabrir la nómina";
+      const errorMessage =
+        typeof detail === "string" ? detail : JSON.stringify(detail);
+      alert(errorMessage);
+    } finally {
+      setIsReopening(false);
+    }
   };
 
   return (
@@ -280,7 +359,7 @@ export default function ResumenNomina({
 
       {/* Botón de Cierre o Mensaje de Inmutabilidad */}
       {isCerrado ? (
-        <div className="flex justify-center pt-4 pb-12">
+        <div className="flex flex-col items-center justify-center pt-4 pb-12 gap-4">
           <div className="bg-amber-50 border-l-4 border-amber-500 p-6 rounded-xl shadow-sm text-amber-900 max-w-2xl w-full flex items-center gap-4">
             <div className="p-2 bg-amber-100 rounded-full text-amber-700">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -296,6 +375,18 @@ export default function ResumenNomina({
               </p>
             </div>
           </div>
+
+          {(String(perfilAportante?.rol || "").toUpperCase().trim() === "SUPERADMIN" ||
+            String(perfilAportante?.rol || "").toUpperCase().trim() === "ADMINISTRADOR") && (
+            <button
+              type="button"
+              onClick={handleReabrirNomina}
+              disabled={isReopening}
+              className="inline-flex items-center justify-center gap-2 font-bold py-2 px-6 text-sm text-white bg-red-600 hover:bg-red-700 transition-colors duration-200 rounded-lg shadow disabled:opacity-50"
+            >
+              {isReopening ? "Reabriendo..." : "🔓 Reabrir Nómina (STAFF)"}
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex justify-center pt-6 pb-12">

@@ -167,6 +167,7 @@ function App() {
   const [perfilError, setPerfilError] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingMasivo, setIsSyncingMasivo] = useState(false);
   const [empleadosEncontrados, setEmpleadosEncontrados] = useState([]);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState("");
   const [isContractOpen, setIsContractOpen] = useState(false);
@@ -578,6 +579,72 @@ function App() {
       alert("Hubo un error sincronizando el empleado con el CRM.");
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handleSyncMasivo = async (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    setIsSyncingMasivo(true);
+    setError(null);
+    setSearchError(null);
+
+    try {
+      const targetId = empleadorId || "me";
+      const response = await apiClient(
+        `${import.meta.env.VITE_API_URL}/api/v1/empleador/${targetId}/sync-masivo`,
+        { method: "POST" }
+      );
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `Error HTTP: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.status === "success" && data.data) {
+        setEmpleadosEncontrados(data.data);
+        setSelectedEmpleadoId("");
+        setFormData({
+          ID_CONTRATO: "",
+          SALARIO_BASE: SMLV_ACTUAL,
+          DIAS_LABORADOS: 15,
+          ES_SMLV: "SI",
+          CON_BONO: "NO",
+          TIENE_AUX: "SI",
+          TIPO_CONTRATO: "TIEMPO COMPLETO",
+          CARGO_DESEMPENEADO: "",
+          ESTADO_EMPLEADO: "ACTIVO",
+          PERIODO_PAGO: "QUINCENAL",
+          SALARIO_ESPECIE: "",
+          VLR_BONO: "",
+          CON_PRESTAMO: "NO",
+          PRESTAMOS: "",
+          DIAS_VACACIONES: 0,
+          DIAS_INCAPACIDAD: 0,
+          REPORTAR_EXTRAS: "NO",
+          HED: 0,
+          HEN: 0,
+          HEDF: 0,
+          HENF: 0,
+          RN: 0,
+          RDN: 0,
+          RNF: 0,
+          EPS: "",
+          FONDO_PENSIONES: "",
+        });
+        alert("Sincronización masiva con el CRM completada exitosamente.");
+      } else {
+        throw new Error("Respuesta inválida del servidor en sincronización masiva");
+      }
+    } catch (error) {
+      console.error("Error al forzar sincronización masiva con el CRM:", error);
+      alert(`Hubo un error en la sincronización masiva: ${error.message || "Error desconocido"}`);
+    } finally {
+      setIsSyncingMasivo(false);
     }
   };
 
@@ -1062,11 +1129,11 @@ function App() {
                         {(perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
                           <button
                             type="button"
-                            onClick={(e) => handleSyncEmpleado(e, formData.ID_CONTRATO)}
-                            disabled={isSyncing}
+                            onClick={(e) => handleSyncEmpleado(e, selectedEmpleadoId)}
+                            disabled={isSyncing || !selectedEmpleadoId}
                             className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
                           >
-                            {isSyncing ? "Sincronizando..." : "🔄 Sincronizar a CRM"}
+                            {isSyncing ? "Sincronizando..." : "🔄 Sincronizar Empleado"}
                           </button>
                         )}
                         {isValidLink && (
@@ -1177,11 +1244,21 @@ function App() {
                     </div>
 
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 gap-2">
                         <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-0">
                           Datos del Empleador:{" "}
                           {perfilAportante?.razon_social || "Cargando..."}
                         </h4>
+                        {(perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
+                          <button
+                            type="button"
+                            onClick={handleSyncMasivo}
+                            disabled={isSyncingMasivo || isSearching}
+                            className="border border-[#5b97a9] text-[#5b97a9] hover:bg-[#5b97a9] hover:text-white px-3 py-1.5 rounded-md font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                          >
+                            {isSyncingMasivo ? "Sincronizando..." : "🔄 Sincronizar Empresa"}
+                          </button>
+                        )}
                       </div>
 
                       {(perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
@@ -2173,6 +2250,7 @@ function App() {
               quincena={quincenaPago}
               idAportante={empleadorId}
               onRowClick={handleRowClick}
+              perfilAportante={perfilAportante}
             />
           )}
 
