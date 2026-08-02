@@ -23,6 +23,7 @@
 - **`m_empleados`:** `id_contrato` (PK compuesta), `id_empleado` (Cédula), `id_aportante` (FK), `link_drive`, `estado_empleado`.
 - **`t_novedades`:** Histórico de nómina quincenal por `id_contrato`.
 - **`t_cierres_nomina`:** El Candado por `id_contrato`.
+- **`t_auditoria_logs` (NUEVO FASE 6):** Tabla de telemetría y trazabilidad con campo `JSONB` para registrar cierres, reaperturas (Override) y guardados históricos de todos los roles.
 - **`m_perfiles`:** Contiene `id_aportante` (FK) y `rol`. Arquitectura RBAC Multi-Tenant: 
   - `EMPLEADOR`: Solo ve su propia empresa (Filtrado estricto por id_aportante).
   - `ADMINISTRADOR` / `SUPERADMIN`: Staff interno. Saltan el filtro de tenant para ver a todos los clientes.

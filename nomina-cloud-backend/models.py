@@ -1,6 +1,6 @@
 import uuid
 import datetime
-from sqlalchemy import Column, String, Boolean, Numeric, Text, TIMESTAMP, ForeignKey
+from sqlalchemy import Column, String, Boolean, Numeric, Text, TIMESTAMP, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from enum import StrEnum
 from database import Base
@@ -157,3 +157,19 @@ class CierreNomina(Base):
     quincena_pago = Column(String(50), nullable=False)
     fecha_cierre = Column(TIMESTAMP(timezone=True), default=datetime.datetime.utcnow)
     cerrado_por = Column(String(100), nullable=True)
+
+
+class AuditoriaLog(Base):
+    """
+    Modelo ORM para t_auditoria_logs (Trazabilidad de acciones del STAFF y EMPLEADOR).
+    """
+    __tablename__ = "t_auditoria_logs"
+
+    id_log = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    fecha_evento = Column(TIMESTAMP(timezone=True), default=datetime.datetime.utcnow)
+    usuario_email = Column(String(100), nullable=True)
+    rol_usuario = Column(String(50), nullable=True)
+    id_aportante = Column(String(50), nullable=True)
+    tipo_accion = Column(String(100), nullable=False)
+    entidad_afectada = Column(String(100), nullable=True)
+    detalles = Column(JSON, nullable=True)

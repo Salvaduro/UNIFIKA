@@ -12,14 +12,14 @@
 - **Tipado Estricto:** PostgreSQL rechaza comparaciones String vs Integer. Siempre usar `str(id_aportante)` antes de cualquier consulta SQL/SQLAlchemy.
 - **Escudo Anti-Nulls (Side-Effects):** Al hacer un `UPDATE` o `UPSERT` en tablas maestras (`m_aportantes`, `m_empleados`), el modelo Pydantic DEBE incluir `exclude_unset=True, exclude_none=True`. Nunca sobreescribir datos valiosos con NULL por recibir payloads incompletos.
 - **Normalización Estricta (RBAC):** Toda lectura de roles desde la base de datos o JWT debe forzar obligatoriamente el formato en mayúsculas (`str(rol).upper().strip()`) antes de cualquier evaluación lógica.
-- **Transacciones Envenenadas:** Toda lectura de BD que preceda a un `UPSERT` debe estar envuelta en `try-except` con un `db.rollback()` obligatorio en caso de fallo.
+- **Transacciones Envenenadas y Prevención de Falsos Positivos:** Toda escritura múltiple en BD (ej. nómina + auditoría) debe estar envuelta en `try-except` con un `db.rollback()` obligatorio en caso de fallo. CRÍTICO: Después del rollback, ESTÁ ESTRICTAMENTE PROHIBIDO retornar diccionarios simples como `return {"status": "error"}`. Siempre se debe lanzar un `raise HTTPException(status_code=500, detail=...)` para que FastAPI devuelva el código HTTP correcto y el frontend detenga sus procesos (Promise Chaining).
 - **Llaves Compuestas:** La llave primaria de un empleado en la nómina es `id_contrato` (`NIT_CEDULA`). Cuando se busca en Wolkvox, se debe extraer la cédula real (Unpacking).
 
 ## 3. REGLAS DE FRONTEND (REACT / VITE)
-- **UI de Nómina:** Un solo botón de "Guardar y Descargar Desprendible" (Promise Chaining). Si la nómina está cerrada, el botón desaparece y se muestra un mensaje estático.
+- **UI de Nómina (Promise Chaining):** Un solo botón de "Guardar y Descargar Desprendible". Evalúa estrictamente `response.ok`. Si la nómina está cerrada, el botón desaparece y se muestra un mensaje estático.
 - **Seguridad de Sesión (Idle Timer):** Cierre de sesión automático tras 15 minutos de inactividad (borrado de tokens local).
 - **Prohibido Guardar al Morir (Unmount):** La acción de Logout NUNCA debe lanzar peticiones HTTP `POST/PUT` al backend. Solo destruye sesión localmente.
-- **Manejo de Errores Visuales:** Las alertas (Toasts) nunca deben mostrar `[object Object]`. Siempre extraer `error.response?.data?.detail`.
+- **Manejo de Errores Visuales:** Las alertas (Toasts) nunca deben mostrar `[object Object]`. Siempre extraer `error.response?.data?.detail` o usar el mensaje del HTTPException.
 
 ## 4. REGLAS DE INTEGRACIÓN Y RED (WOLKVOX / FIXIE)
 - **Proxy Obligatorio:** Las peticiones a Wolkvox deben salir por la variable `FIXIE_URL` usando `proxy=fixie_url`.

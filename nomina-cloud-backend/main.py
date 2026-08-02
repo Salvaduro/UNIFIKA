@@ -3,6 +3,7 @@ import math
 import datetime
 import os
 import logging
+import json
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from fastapi.responses import Response
@@ -59,6 +60,35 @@ def formatear_periodo(valor):
         return pd.to_datetime(valor).strftime('%B %Y').upper()
     except:
         return str(valor).upper()
+
+
+def registrar_auditoria(db: Session, current_user: dict, tipo_accion: str, entidad_afectada: str = None, detalles: dict = None):
+    if isinstance(current_user, dict):
+        email = str(current_user.get("email", "desconocido")).strip()
+        rol = str(current_user.get("rol", "")).upper().strip()
+        id_aportante = str(current_user.get("id_aportante", "")).strip()
+    else:
+        email = str(getattr(current_user, "email", "desconocido")).strip()
+        rol = str(getattr(current_user, "rol", "")).upper().strip()
+        id_aportante = str(getattr(current_user, "id_aportante", "")).strip()
+
+    detalles_json = json.dumps(detalles or {}, ensure_ascii=False)
+
+    query = text("""
+        INSERT INTO t_auditoria_logs (
+            usuario_email, rol_usuario, id_aportante, tipo_accion, entidad_afectada, detalles
+        ) VALUES (
+            :email, :rol, :id_aportante, :tipo_accion, :entidad_afectada, CAST(:detalles AS jsonb)
+        )
+    """)
+    db.execute(query, {
+        "email": email,
+        "rol": rol,
+        "id_aportante": id_aportante,
+        "tipo_accion": str(tipo_accion).strip(),
+        "entidad_afectada": str(entidad_afectada).strip() if entidad_afectada else None,
+        "detalles": detalles_json
+    })
 
 
 class ComprobantePDF(FPDF):
@@ -604,11 +634,22 @@ def cerrar_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), c
         """)
         db.execute(insert, {"id_contrato": id_contrato_str,
                    "periodo": payload.periodo, "quincena": quincena_str, "email": email})
+        registrar_auditoria(
+            db=db,
+            current_user=current_user,
+            tipo_accion="CIERRE_NOMINA",
+            entidad_afectada=id_contrato_str,
+            detalles={
+                "id_contrato": id_contrato_str,
+                "periodo": payload.periodo,
+                "quincena": quincena_str
+            }
+        )
         db.commit()
         return {"status": "success", "message": "Nómina cerrada exitosamente."}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error en transacción: {str(e)}")
 
 
 @app.delete("/api/v1/nomina/reabrir")
@@ -637,12 +678,22 @@ def reabrir_nomina(payload: CierreNominaRequest, db: Session = Depends(get_db), 
             "periodo": periodo_str,
             "quincena": quincena_str
         })
+        registrar_auditoria(
+            db=db,
+            current_user=current_user,
+            tipo_accion="OVERRIDE_REAPERTURA",
+            entidad_afectada=id_contrato_str,
+            detalles={
+                "id_contrato": id_contrato_str,
+                "periodo": periodo_str,
+                "quincena": quincena_str
+            }
+        )
         db.commit()
-        logger.info(f"AUDITORÍA OVERRIDE: El usuario {email} ha reabierto la nómina del contrato {id_contrato_str} para el periodo {periodo_str} {quincena_str}")
         return {"status": "success", "message": "Nómina reabierta exitosamente."}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error en transacción: {str(e)}")
 
 
 @app.get("/api/v1/nomina/resumen/{periodo}/{quincena}")
@@ -1457,6 +1508,18 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             db.execute(upsert_query, params)
             records_saved += 1
 
+        registrar_auditoria(
+            db=db,
+            current_user=current_user,
+            tipo_accion="GUARDADO_HISTORICO",
+            entidad_afectada="t_novedades",
+            detalles={
+                "periodo_liq": periodo_check,
+                "quincena_pago": quincena_check,
+                "registros_procesados": records_saved,
+                "contratos_afectados": [str(c) for c in contratos_afectados]
+            }
+        )
         db.commit()
         return {
             "status": "success",
@@ -1465,7 +1528,7 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
         }
     except Exception as e:
         db.rollback()
-        return {"status": "error", "message": f"Error al guardar histórico: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Error en transacción: {str(e)}")
 
 
 @app.get("/api/v1/nomina/periodos-historico")
@@ -1574,3 +1637,58 @@ def obtener_historico(aportante_id: str = None, db: Session = Depends(get_db), c
     except Exception as e:
         error_msg = f"Error Interno de Python: {str(e)}"
         raise HTTPException(status_code=500, detail=error_msg)
+
+
+# =========================================================
+# ENDPOINT DE TELEMETRÍA Y LOGS DE AUDITORÍA (STAFF)
+# =========================================================
+
+@app.get("/api/v1/auditoria/logs")
+async def obtener_logs_auditoria(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint de lectura para visualizar los logs del sistema (t_auditoria_logs).
+    Exclusivo para rol SUPERADMIN.
+    """
+    rol = str(current_user.get("rol", "") if isinstance(current_user, dict) else getattr(current_user, "rol", "")).upper().strip()
+    if rol != models.RolUsuario.SUPERADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso Denegado. Solo el rol SUPERADMIN puede consultar los logs de auditoría."
+        )
+
+    try:
+        query = text("""
+            SELECT id_log, fecha_evento, usuario_email, rol_usuario, id_aportante,
+                   tipo_accion, entidad_afectada, detalles
+            FROM t_auditoria_logs
+            ORDER BY fecha_evento DESC
+            LIMIT 200
+        """)
+        rows = db.execute(query).mappings().all()
+
+        logs = []
+        for row in rows:
+            r = dict(row)
+            detalles_val = r.get("detalles")
+            if isinstance(detalles_val, str):
+                try:
+                    detalles_val = json.loads(detalles_val)
+                except Exception:
+                    pass
+            r["detalles"] = detalles_val
+            if isinstance(r.get("fecha_evento"), (datetime.datetime, datetime.date)):
+                r["fecha_evento"] = r["fecha_evento"].isoformat()
+            logs.append(r)
+
+        return {
+            "status": "success",
+            "total": len(logs),
+            "data": logs
+        }
+    except Exception as e:
+        logger.error(f"Error consultando logs de auditoría: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno al consultar logs de auditoría: {str(e)}")
+

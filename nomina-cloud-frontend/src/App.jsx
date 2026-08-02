@@ -5,6 +5,7 @@ import Auth from "./components/Auth";
 import ResetPassword from "./components/ResetPassword";
 import ResumenNomina from "./components/ResumenNomina";
 import DashboardHistorico from "./components/DashboardHistorico";
+import DashboardAuditoria from "./components/DashboardAuditoria";
 import IdleTimer from "./components/IdleTimer";
 import { supabase } from "./lib/supabaseClient";
 import { apiClient } from "./lib/apiClient";
@@ -1058,6 +1059,7 @@ function App() {
                 {activeTab === "liquidacion" && "Cálculo de Nómina"}
                 {activeTab === "resumen" && "Revisión Final y Aprobación"}
                 {activeTab === "historico" && "Archivo de Pagos Anteriores"}
+                {activeTab === "auditoria" && "Registro de Auditoría y Telemetría"}
               </h1>
               <p className="mt-2 text-sm text-gray-600 max-w-2xl transition-colors duration-300">
                 {activeTab === "liquidacion" &&
@@ -1066,11 +1068,13 @@ function App() {
                   "Revisa el resumen de pagos y aprueba la nómina para generar los desprendibles."}
                 {activeTab === "historico" &&
                   "Consulta las nóminas pasadas y descarga los comprobantes de pago de tus empleados."}
+                {activeTab === "auditoria" &&
+                  "Supervisa y analiza la trazabilidad completa y eventos del sistema (Acceso exclusivo SUPERADMIN)."}
               </p>
             </div>
 
             {/* Tabs Nav */}
-            <div className="flex bg-slate-200/50 p-1 rounded-xl w-full md:w-auto self-start">
+            <div className="flex bg-slate-200/50 p-1 rounded-xl w-full md:w-auto self-start flex-wrap">
               <button
                 onClick={() => setActiveTab("liquidacion")}
                 className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === "liquidacion" ? "bg-[#83a9b2] text-white shadow-md" : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"}`}
@@ -1089,6 +1093,14 @@ function App() {
               >
                 3. Historial de Nóminas
               </button>
+              {perfilAportante?.rol === "SUPERADMIN" && (
+                <button
+                  onClick={() => setActiveTab("auditoria")}
+                  className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === "auditoria" ? "bg-[#83a9b2] text-white shadow-md" : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"}`}
+                >
+                  4. Auditoría (Staff)
+                </button>
+              )}
             </div>
           </div>
 
@@ -2256,6 +2268,10 @@ function App() {
 
           {activeTab === "historico" && (
             <DashboardHistorico idAportante={empleadorId} />
+          )}
+
+          {activeTab === "auditoria" && perfilAportante?.rol === "SUPERADMIN" && (
+            <DashboardAuditoria />
           )}
         </main>
       </div>

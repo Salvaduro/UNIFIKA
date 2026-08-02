@@ -29,9 +29,35 @@ Tu primera instrucción: Confírmame en una sola frase que has leído y cargado 
 
 ### 🛩️ PARA SUBIR UN NUEVO COMMIT
 
+# OBJETIVO DEL TICKET: Push a Producción - Ajustes de UX Copy
+El Director de Proyecto ha validado y aprobado los últimos ajustes de textos (UX Copy) en la interfaz para humanizar la plataforma. Necesitamos subir esto a producción para cerrar la etapa.
+
+# INSTRUCCIONES DE EJECUCIÓN (GIT WORKFLOW)
+
+1. **Verificación de Estado:**
+   - Ejecuta `git status` para confirmar que `App.jsx` está modificado.
+   - Verifica rápidamente que ningún archivo `.env` esté en el área de staging.
+
+2. **Añadir Cambios y Commit Estructurado:**
+   - Añade los archivos: `git add .`
+   - Realiza un commit formal respetando las convenciones de commit semántico:
+     `git commit -m "refactor(ui): humanizar textos de cabeceras, pestañas y formulario de deducciones"`
+
+3. **Despliegue a Producción:**
+   - Realiza el push a la rama principal de GitHub:
+     `git push origin main`
+
+Antigravity, ejecuta git diff de los cambios que acabas de hacer y revisa línea por línea si accidentalmente borraste alguna validación anterior o rompiste alguna regla de ANTIGRAVITY_RULES.md. Confírmame antes de hacer commit."
+
+Confírmale al Director en una sola frase cuando el push se haya completado con éxito.
+
+
 El "Self-Review" Forzado (Auto-revisión)
 A veces, por ir rápido, el agente borra una línea que no debía. Antes de hacer un commit o desplegar a producción, puedes pedirle a Antigravity en el IDE que revise su propio trabajo.
 
 El comando mágico: "Antigravity, ejecuta git diff de los cambios que acabas de hacer y revisa línea por línea si accidentalmente borraste alguna validación anterior o rompiste alguna regla de ANTIGRAVITY_RULES.md. Confírmame antes de hacer commit."
 
 Por qué funciona: Las IAs (especialmente Gemini 3.1 Pro) son mucho mejores criticando código ya escrito que escribiéndolo perfecto al primer intento. Al pedirle que se auto-evalúe, suele detectar sus propios errores y decirte: "Tienes razón, borré una línea accidentalmente, lo corrijo".
+
+
+https://app.unifika.co/
