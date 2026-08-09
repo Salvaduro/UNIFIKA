@@ -14,6 +14,7 @@ export default function ResumenNomina({
   const [isCerrado, setIsCerrado] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [isReopening, setIsReopening] = useState(false);
+  const [isSendingEmails, setIsSendingEmails] = useState(false);
 
   useEffect(() => {
     if (!periodo || !quincena) return;
@@ -187,6 +188,59 @@ export default function ResumenNomina({
       alert(errorMessage);
     } finally {
       setIsReopening(false);
+    }
+  };
+
+  const handleEnviarCorreos = async () => {
+    if (!empleados || empleados.length === 0) {
+      alert("No hay empleados para enviar desprendibles.");
+      return;
+    }
+    if (!window.confirm("¿Deseas enviar los desprendibles de pago por correo a tu dirección registrada?")) {
+      return;
+    }
+
+    setIsSendingEmails(true);
+    try {
+      const payload = {
+        periodo: String(periodo).toUpperCase().trim(),
+        quincena: String(quincena).trim(),
+        contratos: empleados.map(e => e.id_contrato),
+      };
+
+      const response = await apiClient(
+        `${import.meta.env.VITE_API_URL}/api/v1/nomina/enviar-desprendibles`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (!response.ok) {
+        let errData = {};
+        try {
+          errData = await response.json();
+        } catch (e) {}
+        const errorObj = new Error(errData.detail || "Error al enviar correos");
+        errorObj.response = { data: errData };
+        throw errorObj;
+      }
+
+      alert("¡Desprendibles enviados exitosamente!");
+    } catch (error) {
+      console.error("Error al enviar correos:", error);
+      const detail =
+        error.response?.data?.detail ||
+        error.message ||
+        "Error desconocido al enviar correos";
+      const errorMessage =
+        typeof detail === "string" ? detail : JSON.stringify(detail);
+      alert(errorMessage);
+    } finally {
+      setIsSendingEmails(false);
     }
   };
 
@@ -472,6 +526,31 @@ export default function ResumenNomina({
           </button>
         </div>
       )}
+
+      {/* Botón de Enviar Desprendibles (Siempre Visible) */}
+      <div className="flex justify-center pb-12">
+        <button
+          type="button"
+          onClick={handleEnviarCorreos}
+          disabled={isSendingEmails}
+          className={`inline-flex items-center justify-center gap-3 font-bold py-3 px-8 text-md transition-colors duration-200 rounded-lg shadow-sm focus:outline-none border ${isSendingEmails ? "bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed" : "bg-white text-[#5b97a9] border-[#5b97a9] hover:bg-[#5b97a9] hover:text-white"}`}
+        >
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+            ></path>
+          </svg>
+          {isSendingEmails ? "Enviando Correos..." : "✉️ Enviar Desprendibles por Correo"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -18,10 +18,13 @@ import httpx
 from core.security import get_current_user, get_current_user_unblocked, supabase_client, filter_by_tenant, UserContext
 import models
 import schemas
+import resend
 from dotenv import load_dotenv
 
 load_dotenv(".env.local")
 load_dotenv(".env")
+
+resend.api_key = os.environ.get("RESEND_API_KEY")
 
 logger = logging.getLogger("uvicorn")
 
@@ -569,6 +572,11 @@ async def sincronizar_masivo_empleador(id_contacto: str, db: Session = Depends(g
         "data": empleados_limpios
     }
 
+
+class EnviarDesprendiblesRequest(BaseModel):
+    periodo: str
+    quincena: str
+    contratos: List[str]
 
 class CierreNominaRequest(BaseModel):
     periodo: str
@@ -1290,7 +1298,7 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     deducciones = [
         ("Aporte Salud (4%)", 'SALUD_4'),
         ("Aporte Pensión (4%)", 'PENSION_4'),
-        ("Descuento por Préstamos", 'PRESTAMOS'),
+        ("Descuento para el Período", 'PRESTAMOS'),
         ("Salario Especie (Recibido)", 'SALARIO_ESPECIE_MES')
     ]
 
@@ -1383,6 +1391,89 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
         headers={'Content-Disposition': f'attachment; filename={nombre_archivo}'}
     )
 
+
+@app.post("/api/v1/nomina/enviar-desprendibles")
+def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Envía los desprendibles en memoria vía Resend.
+    """
+    email_dest = str(current_user.get("email", "")).strip()
+    if not email_dest or email_dest.lower() == "desconocido":
+        raise HTTPException(status_code=400, detail="El usuario actual no tiene un correo válido.")
+
+    if not resend.api_key:
+        raise HTTPException(status_code=500, detail="La API Key de Resend no está configurada.")
+
+    mail_from = os.environ.get("MAIL_FROM", "nomina@unifika.co")
+    
+    try:
+        for id_contrato in payload.contratos:
+            query = text("""
+                SELECT e.*, n.*, 
+                       n.salario_base as salario_base_novedad,
+                       n.vlr_bono as vlr_bono_novedad,
+                       n.sal_especie as sal_especie_novedad,
+                       n.prestamos as prestamos_novedad,
+                       a.razon_social as razon_social,
+                       a.tipo_documento as tipo_documento,
+                       a.id_aportante as id_aportante
+                FROM m_empleados e
+                JOIN t_novedades n ON e.id_contrato = n.id_contrato
+                LEFT JOIN m_aportantes a ON e.id_aportante = a.id_aportante
+                WHERE e.id_contrato = :id_contrato
+                  AND n.periodo_liq = :periodo
+                  AND n.quincena_pago = :quincena
+            """)
+            row = db.execute(query, {"id_contrato": id_contrato, "periodo": payload.periodo, "quincena": payload.quincena}).mappings().first()
+                             
+            if not row:
+                continue
+                
+            row_dict = {k.upper(): v for k, v in dict(row).items()}
+
+            if 'SALARIO_BASE_NOVEDAD' in row_dict and row_dict['SALARIO_BASE_NOVEDAD'] is not None:
+                row_dict['SALARIO_BASE'] = row_dict['SALARIO_BASE_NOVEDAD']
+            if 'VLR_BONO_NOVEDAD' in row_dict and row_dict['VLR_BONO_NOVEDAD'] is not None:
+                row_dict['VALOR_BONO'] = row_dict['VLR_BONO_NOVEDAD']
+            if 'SAL_ESPECIE_NOVEDAD' in row_dict and row_dict['SAL_ESPECIE_NOVEDAD'] is not None:
+                row_dict['SALARIO_ESPECIE_MES'] = row_dict['SAL_ESPECIE_NOVEDAD']
+            if 'PRESTAMOS_NOVEDAD' in row_dict and row_dict['PRESTAMOS_NOVEDAD'] is not None:
+                row_dict['PRESTAMOS'] = row_dict['PRESTAMOS_NOVEDAD']
+
+            if not row_dict.get('SAL_REF'):
+                row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in ['SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
+
+            response_pdf = generar_comprobante(row_dict)
+            pdf_bytes = response_pdf.body
+            
+            headers = response_pdf.headers
+            content_disposition = headers.get("content-disposition", "")
+            nombre_archivo = "Desprendible.pdf"
+            if "filename=" in content_disposition:
+                nombre_archivo = content_disposition.split("filename=")[-1].strip().strip('"')
+            
+            nombre_empleado = row_dict.get('NOMBRE_EMPLEADO', 'Empleado')
+            periodo_texto = payload.periodo
+            
+            resend.Emails.send({
+                "from": mail_from,
+                "to": email_dest,
+                "subject": f"Desprendible de Nómina - {nombre_empleado} - {periodo_texto}",
+                "html": f"<p>Adjunto encontrarás el desprendible de pago de {nombre_empleado} para el periodo {periodo_texto}.</p>",
+                "attachments": [
+                    {
+                        "filename": nombre_archivo,
+                        "content": list(pdf_bytes)
+                    }
+                ]
+            })
+            
+        return {"status": "success", "message": "Desprendibles enviados correctamente"}
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al enviar desprendibles: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al enviar desprendibles. Por favor, intente de nuevo. Detalle: {str(e)}")
 
 @app.post("/api/v1/historico/guardar")
 def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Body(...), db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
