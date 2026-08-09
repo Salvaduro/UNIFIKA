@@ -14,6 +14,7 @@ fpdf2==2.8.7
 greenlet==3.5.2
 h11==0.16.0
 h2==4.3.0
+holidays==0.53
 hpack==4.2.0
 httpcore==1.0.9
 httpx==0.28.1
