@@ -11,12 +11,12 @@ import json
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from fastapi.responses import Response
-from fastapi import FastAPI, Depends, Body, HTTPException, Request
+from fastapi import FastAPI, Depends, Body, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Dict, Any, Union, Optional, Tuple
-from database import get_db
+from database import get_db, SessionLocal
 from pydantic import BaseModel
 import httpx
 from core.security import get_current_user, get_current_user_unblocked, supabase_client, filter_by_tenant, UserContext
@@ -791,7 +791,7 @@ async def obtener_resumen_nomina(periodo: str, quincena: str, id_aportante: str 
             AND c.periodo_liq = :periodo 
             AND c.quincena_pago = :quincena
         WHERE e.id_aportante = :id_aportante
-          AND UPPER(e.estado_empleado) = 'ACTIVO'
+          AND TRIM(e.estado_empleado) NOT IN ('RETIRADO', 'En Mora SS', 'UnicaAfiliacion')
     """)
     resultado = db.execute(query, {"periodo": periodo, "quincena": quincena,
                            "id_aportante": id_aportante_str}).mappings().all()
@@ -1245,8 +1245,8 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
                      'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
 
-    periodo_liq = formatear_periodo(row.get('PERIODO_LIQ', 'SIN PERIODO'))
-    quincena_pago = str(row.get('QUINCENA_PAGO', '')).strip().upper()
+    periodo_liq = formatear_periodo(row.get('PERIODO_LIQ') or 'SIN PERIODO')
+    quincena_pago = str(row.get('QUINCENA_PAGO') or "").strip().upper()
 
     if quincena_pago in ['1', 'Q1']:
         texto_periodo = f"Primera Quincena de {periodo_liq}"
@@ -1257,15 +1257,15 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     else:
         texto_periodo = periodo_liq
 
-    id_empleado = str(row.get('ID_EMPLEADO', 'SIN_EMPLEADO')).strip()
+    id_empleado = str(row.get('ID_EMPLEADO') or 'SIN_EMPLEADO').strip()
 
     sal_ref_fila = forzar_numero(row.get('SAL_REF', 0))
     v_hora_fila = sal_ref_fila / HR_MES
 
     datos_emp = {
-        'nombre': str(row.get('RAZON_SOCIAL', 'EMPRESA NO ENCONTRADA')),
-        'nit': str(row.get('ID_APORTANTE', '000.000.000-0')),
-        'tipo': str(row.get('TIPO_DOCUMENTO', 'PERSONA JURÍDICA'))
+        'nombre': str(row.get('RAZON_SOCIAL') or 'EMPRESA NO ENCONTRADA'),
+        'nit': str(row.get('ID_APORTANTE') or '000.000.000-0'),
+        'tipo': str(row.get('TIPO_DOCUMENTO') or 'PERSONA JURÍDICA')
     }
 
     pdf = ComprobantePDF(datos_emp, texto_periodo)
@@ -1279,9 +1279,9 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
 
     pdf.set_font('helvetica', '', 10)
     pdf.ln(2)
-    pdf.cell(95, 6, f"Nombre: {row.get('NOMBRE_EMPLEADO', '')}")
-    pdf.cell(60, 6, f"Tipo Contrato: {row.get('TIPO_CONTRATO', '')}")
-    pdf.cell(50, 6, f"Tipo ID: {row.get('T_ID_EMPLEADO', '')}",
+    pdf.cell(95, 6, f"Nombre: {row.get('NOMBRE_EMPLEADO') or ''}")
+    pdf.cell(60, 6, f"Tipo Contrato: {row.get('TIPO_CONTRATO') or ''}")
+    pdf.cell(50, 6, f"Tipo ID: {row.get('T_ID_EMPLEADO') or ''}",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     cargo_val = str(row.get('CARGO') or row.get('CARGO_DESEMPENEADO') or 'NO ASIGNADO').strip()
@@ -1390,7 +1390,7 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     pdf.set_text_color(0, 0, 0)
 
     # --- OBSERVACIONES ---
-    observaciones = row.get("OBSERVACIONES", "").strip()
+    observaciones = (row.get("OBSERVACIONES") or "").strip()
     if observaciones:
         pdf.ln(5)
         pdf.set_font('helvetica', 'B', 9)
@@ -1432,9 +1432,9 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
 
     pdf_bytes = bytes(pdf.output())
 
-    id_contrato = row.get('ID_CONTRATO', 'SIN_CONTRATO')
-    periodo_liq_raw = row.get('PERIODO_LIQ', 'SIN_PERIODO')
-    quincena_pago_raw = row.get('QUINCENA_PAGO', '')
+    id_contrato = str(row.get('ID_CONTRATO') or 'SIN_CONTRATO')
+    periodo_liq_raw = str(row.get('PERIODO_LIQ') or 'SIN_PERIODO')
+    quincena_pago_raw = str(row.get('QUINCENA_PAGO') or '')
 
     periodo_seguro = str(periodo_liq_raw).replace(" ", "_").upper()
     quincena_segura = str(quincena_pago_raw).replace(" ", "_").upper()
@@ -1897,8 +1897,315 @@ async def obtener_logs_auditoria(
 
 
 
+def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_str: str = None):
+    db = SessionLocal()
+    try:
+        if target_date_str:
+            fecha_base = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
+        else:
+            fecha_base = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5))).date()
+            
+        resultado = calcular_fechas_ciclo(fecha_base)
+        if not resultado:
+            logger.info(f"Cron procesar_ciclo_background: No hay acciones de ciclo programadas para hoy ({fecha_base}).")
+            return
+            
+        accion, periodo_liq, quincena_pago = resultado
+        acciones_simuladas = []
+        
+        try:
+            if accion == 'PRELIQUIDAR':
+                query_activos = db.query(models.Empleado).filter(
+                    models.Empleado.estado_empleado.notin_(['RETIRADO', 'En Mora SS', 'UnicaAfiliacion'])
+                )
+                if target_aportante:
+                    query_activos = query_activos.filter(models.Empleado.id_aportante == target_aportante)
+                activos = query_activos.all()
+                
+                if not activos:
+                    logger.info("Cron procesar_ciclo_background: No hay empleados activos para pre-liquidar.")
+                    return
+                    
+                nuevas_novedades = []
+                empleadores_afectados = {}
+                
+                for emp in activos:
+                    ultima_nov = db.query(models.Novedad).filter(
+                        models.Novedad.id_contrato == emp.id_contrato
+                    ).order_by(models.Novedad.created_at.desc()).first()
+                    
+                    # Fuente de la verdad (m_empleados) y regla inmutable de especie
+                    tipo_contrato_str = str(emp.tipo_contrato).strip().upper()
+                    if "EMPLEADO INTERNO" in tipo_contrato_str:
+                        sal_especie_aplicar = emp.sal_especie
+                    else:
+                        sal_especie_aplicar = 0
+                    
+                    if ultima_nov:
+                        nueva_nov = models.Novedad(
+                            id_novedad=str(uuid.uuid4()),
+                            id_contrato=emp.id_contrato,
+                            periodo_liq=periodo_liq,
+                            quincena_pago=quincena_pago,
+                            generar_nomina=True,
+                            hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
+                            dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
+                            dias_laborados=ultima_nov.dias_laborados,
+                            horas_laboradas=ultima_nov.horas_laboradas,
+                            prima_calc=ultima_nov.prima_calc,
+                            salario_base=emp.salario_base,
+                            vlr_bono=emp.vlr_bono,
+                            sal_especie=sal_especie_aplicar,
+                            observaciones="Pre-liquidación automática"
+                        )
+                    else:
+                        nueva_nov = models.Novedad(
+                            id_novedad=str(uuid.uuid4()),
+                            id_contrato=emp.id_contrato,
+                            periodo_liq=periodo_liq,
+                            quincena_pago=quincena_pago,
+                            generar_nomina=True,
+                            hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
+                            dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
+                            dias_laborados=0,
+                            horas_laboradas=0,
+                            prima_calc=0,
+                            salario_base=emp.salario_base,
+                            vlr_bono=emp.vlr_bono,
+                            sal_especie=sal_especie_aplicar,
+                            observaciones="Pre-liquidación automática inicial"
+                        )
+                    
+                    # Calcular totales financieros en vuelo
+                    row_dict_calc = {
+                        "ES_SMLV": emp.es_smlv,
+                        "CON_BONO": emp.con_bono,
+                        "TIENE_AUX": emp.tiene_aux,
+                        "TIPO_CONTRATO": emp.tipo_contrato,
+                        "ESTADO_EMPLEADO": emp.estado_empleado,
+                        "PERIODO_PAGO": emp.periodo_pago,
+                        "SALARIO_BASE": emp.salario_base,
+                        "VLR_BONO": emp.vlr_bono,
+                        "SALARIO_ESPECIE": sal_especie_aplicar,
+                        "EPS": emp.eps,
+                        "FONDO_PENSIONES": emp.afp,
+                        "DIAS_LABORADOS": nueva_nov.dias_laborados or 0,
+                        "HORAS_LABORADAS": nueva_nov.horas_laboradas or 0,
+                        "DIAS_VACACIONES": 0,
+                        "DIAS_INCAPACIDAD": 0,
+                        "PRESTAMOS": 0,
+                        "PRIMA_CALC": nueva_nov.prima_calc or 0,
+                        "HED": 0, "HEN": 0, "HEDF": 0, "HENF": 0, "RN": 0, "RDN": 0, "RNF": 0
+                    }
+                    
+                    try:
+                        res_liq = liquidar_nomina([row_dict_calc], {})
+                        if res_liq:
+                            res_final = res_liq[0]
+                            nueva_nov.ibc_pila = res_final.get("IBC_PILA", 0)
+                            nueva_nov.salud_4 = res_final.get("SALUD_4", 0)
+                            nueva_nov.pension_4 = res_final.get("PENSION_4", 0)
+                            nueva_nov.total_devengado = res_final.get("TOTAL_DEVENGADO", 0)
+                            nueva_nov.total_deducido = res_final.get("TOTAL_DEDUCIDO", 0)
+                            nueva_nov.neto_pagar = res_final.get("NETO_PAGAR", 0)
+                    except Exception as e_liq:
+                        logger.error(f"Error calculando totales en cron para {emp.id_contrato}: {e_liq}")
+                        
+                    nuevas_novedades.append(nueva_nov)
+                    if dry_run:
+                        acciones_simuladas.append({
+                            "accion": "CREAR_NOVEDAD",
+                            "id_contrato": emp.id_contrato,
+                            "periodo": periodo_liq,
+                            "quincena": quincena_pago
+                        })
+                    
+                    if emp.aportante and emp.aportante.email:
+                        email_apo = str(emp.aportante.email)
+                        if email_apo not in empleadores_afectados:
+                            empleadores_afectados[email_apo] = []
+                        empleadores_afectados[email_apo].append(emp.id_contrato)
+                    
+                if not dry_run:
+                    db.bulk_save_objects(nuevas_novedades)
+                    auditoria = models.AuditoriaLog(
+                        usuario_email="SISTEMA_CRON",
+                        rol_usuario="SISTEMA",
+                        tipo_accion="PRELIQUIDACION_MASIVA",
+                        detalles={"periodo": periodo_liq, "quincena": quincena_pago, "empleados_afectados": len(nuevas_novedades)}
+                    )
+                    db.add(auditoria)
+                    db.commit()
+                
+                mail_from = os.environ.get("MAIL_FROM", "nomina@unifika.co")
+                if resend.api_key and not dry_run:
+                    for email_aportante, contratos in empleadores_afectados.items():
+                        attachments = []
+                        for id_contrato in contratos:
+                            try:
+                                query_pdf = text("""
+                                    SELECT e.*, n.*, 
+                                           n.salario_base as salario_base_novedad,
+                                           n.vlr_bono as vlr_bono_novedad,
+                                           n.sal_especie as sal_especie_novedad,
+                                           n.prestamos as prestamos_novedad,
+                                           a.razon_social as razon_social,
+                                           a.tipo_documento as tipo_documento,
+                                           a.id_aportante as id_aportante
+                                    FROM m_empleados e
+                                    JOIN t_novedades n ON e.id_contrato = n.id_contrato
+                                    LEFT JOIN m_aportantes a ON e.id_aportante = a.id_aportante
+                                    WHERE e.id_contrato = :id_contrato
+                                      AND n.periodo_liq = :periodo
+                                      AND n.quincena_pago = :quincena
+                                """)
+                                row = db.execute(query_pdf, {"id_contrato": id_contrato, "periodo": periodo_liq, "quincena": quincena_pago}).mappings().first()
+                                
+                                if row:
+                                    row_dict = {k.upper(): v for k, v in dict(row).items()}
+                                    if 'SALARIO_BASE_NOVEDAD' in row_dict and row_dict['SALARIO_BASE_NOVEDAD'] is not None:
+                                        row_dict['SALARIO_BASE'] = row_dict['SALARIO_BASE_NOVEDAD']
+                                    if 'VLR_BONO_NOVEDAD' in row_dict and row_dict['VLR_BONO_NOVEDAD'] is not None:
+                                        row_dict['VALOR_BONO'] = row_dict['VLR_BONO_NOVEDAD']
+                                    if 'SAL_ESPECIE_NOVEDAD' in row_dict and row_dict['SAL_ESPECIE_NOVEDAD'] is not None:
+                                        row_dict['SALARIO_ESPECIE_MES'] = row_dict['SAL_ESPECIE_NOVEDAD']
+                                    if 'PRESTAMOS_NOVEDAD' in row_dict and row_dict['PRESTAMOS_NOVEDAD'] is not None:
+                                        row_dict['PRESTAMOS'] = row_dict['PRESTAMOS_NOVEDAD']
+
+                                    if not row_dict.get('SAL_REF'):
+                                        row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in ['SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
+
+                                    try:
+                                        res_liq = liquidar_nomina([row_dict], {})
+                                        if res_liq:
+                                            res_final = res_liq[0]
+                                            res_final['RAZON_SOCIAL'] = row_dict.get('RAZON_SOCIAL', 'SIN EMPRESA')
+                                            res_final['TIPO_DOCUMENTO'] = row_dict.get('TIPO_DOCUMENTO', 'NIT')
+                                            res_final['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
+                                            res_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
+                                            res_final['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
+                                            res_final['OBSERVACIONES'] = row_dict.get('OBSERVACIONES')
+                                            res_final['CARGO'] = row_dict.get('CARGO', 'NO ASIGNADO')
+                                            res_final['TIPO_CONTRATO'] = row_dict.get('TIPO_CONTRATO', '')
+                                            res_final['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
+                                            res_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
+                                            row_dict = res_final
+                                    except Exception as eliq:
+                                        pass
+
+                                    response_pdf = generar_comprobante(row_dict)
+                                    pdf_bytes = response_pdf.body
+                                    attachments.append({
+                                        "filename": f"Pre_liquidacion_{id_contrato}.pdf",
+                                        "content": list(pdf_bytes)
+                                    })
+                            except Exception as e_pdf:
+                                logger.error(f"Error generando PDF para adjunto cron {id_contrato}: {e_pdf}")
+
+                        try:
+                            html_content = f"""
+                            <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
+                                <p>Adjunto encontrará el borrador de su pre-liquidación para la quincena {quincena_pago} del periodo {periodo_liq}.</p>
+                                <p><strong>Por motivos de seguridad y auditoría, para aprobar esta nómina o realizar ajustes, por favor inicie sesión en la plataforma haciendo clic en los botones.</strong></p>
+                                <div style="margin-top: 25px;">
+                                    <a href="https://app.unifika.co/" style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-right: 15px; font-weight: bold; display: inline-block;">Aprobada</a>
+                                    <a href="https://app.unifika.co/" style="background-color: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Deseo ajustar información</a>
+                                </div>
+                            </div>
+                            """
+                            resend.Emails.send({
+                                "from": mail_from,
+                                "to": str(email_aportante),
+                                "subject": f"Pre-liquidación de Nómina Lista - {periodo_liq}",
+                                "html": html_content,
+                                "attachments": attachments
+                            })
+                        except Exception as e:
+                            logger.error(f"Error enviando correo de pre-liquidación a {email_aportante}: {e}")
+                elif dry_run:
+                    for email_aportante in empleadores_afectados.keys():
+                        acciones_simuladas.append({
+                            "accion": "ENVIAR_CORREO",
+                            "destinatario": email_aportante
+                        })
+                
+                if dry_run:
+                    logger.info(f"Cron procesar_ciclo_background SIMULACIÓN: Pre-liquidación generada para {len(nuevas_novedades)} contratos. Simuladas: {len(acciones_simuladas)}")
+                else:
+                    logger.info(f"Cron procesar_ciclo_background: Pre-liquidación generada para {len(nuevas_novedades)} contratos.")
+                
+            elif accion == 'CERRAR':
+                query_sql = """
+                    SELECT n.id_contrato 
+                    FROM t_novedades n
+                    LEFT JOIN t_cierres_nomina c ON n.id_contrato = c.id_contrato 
+                                                AND n.periodo_liq = c.periodo_liq 
+                                                AND n.quincena_pago = c.quincena_pago
+                """
+                params = {"periodo": periodo_liq, "quincena": quincena_pago}
+                
+                if target_aportante:
+                    query_sql += """
+                    INNER JOIN m_empleados e ON n.id_contrato = e.id_contrato
+                    WHERE n.periodo_liq = :periodo
+                      AND n.quincena_pago = :quincena
+                      AND c.id_cierre IS NULL
+                      AND e.id_aportante = :target_aportante
+                    """
+                    params["target_aportante"] = target_aportante
+                else:
+                    query_sql += """
+                    WHERE n.periodo_liq = :periodo
+                      AND n.quincena_pago = :quincena
+                      AND c.id_cierre IS NULL
+                    """
+                    
+                query_pendientes = text(query_sql)
+                pendientes = db.execute(query_pendientes, params).fetchall()
+                
+                cierres = []
+                for row in pendientes:
+                    cierres.append(models.CierreNomina(
+                        id_cierre=str(uuid.uuid4()),
+                        id_contrato=row[0],
+                        periodo_liq=periodo_liq,
+                        quincena_pago=quincena_pago,
+                        cerrado_por="SISTEMA_CRON"
+                    ))
+                    if dry_run:
+                        acciones_simuladas.append({
+                            "accion": "CERRAR_NOMINA",
+                            "id_contrato": row[0],
+                            "periodo": periodo_liq,
+                            "quincena": quincena_pago
+                        })
+                    
+                if cierres:
+                    if not dry_run:
+                        db.bulk_save_objects(cierres)
+                        auditoria = models.AuditoriaLog(
+                            usuario_email="SISTEMA_CRON",
+                            rol_usuario="SISTEMA",
+                            tipo_accion="CIERRE_AUTOMATICO",
+                            detalles={"periodo": periodo_liq, "quincena": quincena_pago, "cierres_realizados": len(cierres)}
+                        )
+                        db.add(auditoria)
+                        db.commit()
+                
+                if dry_run:
+                    logger.info(f"Cron procesar_ciclo_background SIMULACIÓN: Cierre automático aplicado a {len(cierres)} contratos. Simuladas: {len(acciones_simuladas)}")
+                else:
+                    logger.info(f"Cron procesar_ciclo_background: Cierre automático aplicado a {len(cierres)} contratos.")
+                
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error en procesar_ciclo_background ({accion}): {e}")
+    finally:
+        db.close()
+
+
 @app.post("/api/v1/cron/procesar-ciclo")
-def procesar_ciclo(request: Request, dry_run: bool = False, target_aportante: str = None, db: Session = Depends(get_db)):
+def procesar_ciclo(request: Request, background_tasks: BackgroundTasks, dry_run: bool = False, target_aportante: str = None):
     cron_secret_header = request.headers.get("X-Cron-Secret")
     cron_secret_env = os.environ.get("CRON_SECRET")
     
@@ -1906,290 +2213,6 @@ def procesar_ciclo(request: Request, dry_run: bool = False, target_aportante: st
         raise HTTPException(status_code=403, detail="Forbidden. Invalid CRON_SECRET.")
 
     target_date_str = request.query_params.get("date")
-    if target_date_str:
-        fecha_base = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
-    else:
-        fecha_base = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5))).date()
-        
-    resultado = calcular_fechas_ciclo(fecha_base)
-    if not resultado:
-        return {"status": "success", "message": f"No hay acciones de ciclo programadas para hoy ({fecha_base})."}
-        
-    accion, periodo_liq, quincena_pago = resultado
-    acciones_simuladas = []
-    
-    try:
-        if accion == 'PRELIQUIDAR':
-            query_activos = db.query(models.Empleado).filter(
-                models.Empleado.estado_empleado == 'ACTIVO'
-            )
-            if target_aportante:
-                query_activos = query_activos.filter(models.Empleado.id_aportante == target_aportante)
-            activos = query_activos.all()
-            
-            if not activos:
-                return {"status": "success", "message": "No hay empleados activos para pre-liquidar."}
-                
-            nuevas_novedades = []
-            empleadores_afectados = {}
-            
-            for emp in activos:
-                ultima_nov = db.query(models.Novedad).filter(
-                    models.Novedad.id_contrato == emp.id_contrato
-                ).order_by(models.Novedad.created_at.desc()).first()
-                
-                # Fuente de la verdad (m_empleados) y regla inmutable de especie
-                tipo_contrato_str = str(emp.tipo_contrato).strip().upper()
-                if "EMPLEADO INTERNO" in tipo_contrato_str:
-                    sal_especie_aplicar = emp.sal_especie
-                else:
-                    sal_especie_aplicar = 0
-                
-                if ultima_nov:
-                    nueva_nov = models.Novedad(
-                        id_novedad=str(uuid.uuid4()),
-                        id_contrato=emp.id_contrato,
-                        periodo_liq=periodo_liq,
-                        quincena_pago=quincena_pago,
-                        generar_nomina=True,
-                        hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
-                        dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
-                        dias_laborados=ultima_nov.dias_laborados,
-                        horas_laboradas=ultima_nov.horas_laboradas,
-                        prima_calc=ultima_nov.prima_calc,
-                        salario_base=emp.salario_base,
-                        vlr_bono=emp.vlr_bono,
-                        sal_especie=sal_especie_aplicar,
-                        observaciones="Pre-liquidación automática"
-                    )
-                else:
-                    nueva_nov = models.Novedad(
-                        id_novedad=str(uuid.uuid4()),
-                        id_contrato=emp.id_contrato,
-                        periodo_liq=periodo_liq,
-                        quincena_pago=quincena_pago,
-                        generar_nomina=True,
-                        hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
-                        dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
-                        dias_laborados=0,
-                        horas_laboradas=0,
-                        prima_calc=0,
-                        salario_base=emp.salario_base,
-                        vlr_bono=emp.vlr_bono,
-                        sal_especie=sal_especie_aplicar,
-                        observaciones="Pre-liquidación automática inicial"
-                    )
-                
-                # Calcular totales financieros en vuelo
-                row_dict_calc = {
-                    "ES_SMLV": emp.es_smlv,
-                    "CON_BONO": emp.con_bono,
-                    "TIENE_AUX": emp.tiene_aux,
-                    "TIPO_CONTRATO": emp.tipo_contrato,
-                    "ESTADO_EMPLEADO": emp.estado_empleado,
-                    "PERIODO_PAGO": emp.periodo_pago,
-                    "SALARIO_BASE": emp.salario_base,
-                    "VLR_BONO": emp.vlr_bono,
-                    "SALARIO_ESPECIE": sal_especie_aplicar,
-                    "EPS": emp.eps,
-                    "FONDO_PENSIONES": emp.afp,
-                    "DIAS_LABORADOS": nueva_nov.dias_laborados or 0,
-                    "HORAS_LABORADAS": nueva_nov.horas_laboradas or 0,
-                    "DIAS_VACACIONES": 0,
-                    "DIAS_INCAPACIDAD": 0,
-                    "PRESTAMOS": 0,
-                    "PRIMA_CALC": nueva_nov.prima_calc or 0,
-                    "HED": 0, "HEN": 0, "HEDF": 0, "HENF": 0, "RN": 0, "RDN": 0, "RNF": 0
-                }
-                
-                try:
-                    res_liq = liquidar_nomina([row_dict_calc], {})
-                    if res_liq:
-                        res_final = res_liq[0]
-                        nueva_nov.ibc_pila = res_final.get("IBC_PILA", 0)
-                        nueva_nov.salud_4 = res_final.get("SALUD_4", 0)
-                        nueva_nov.pension_4 = res_final.get("PENSION_4", 0)
-                        nueva_nov.total_devengado = res_final.get("TOTAL_DEVENGADO", 0)
-                        nueva_nov.total_deducido = res_final.get("TOTAL_DEDUCIDO", 0)
-                        nueva_nov.neto_pagar = res_final.get("NETO_PAGAR", 0)
-                except Exception as e_liq:
-                    logger.error(f"Error calculando totales en cron para {emp.id_contrato}: {e_liq}")
-                    
-                nuevas_novedades.append(nueva_nov)
-                if dry_run:
-                    acciones_simuladas.append({
-                        "accion": "CREAR_NOVEDAD",
-                        "id_contrato": emp.id_contrato,
-                        "periodo": periodo_liq,
-                        "quincena": quincena_pago
-                    })
-                
-                if emp.aportante and emp.aportante.email:
-                    email_apo = str(emp.aportante.email)
-                    if email_apo not in empleadores_afectados:
-                        empleadores_afectados[email_apo] = []
-                    empleadores_afectados[email_apo].append(emp.id_contrato)
-                
-            if not dry_run:
-                db.bulk_save_objects(nuevas_novedades)
-                auditoria = models.AuditoriaLog(
-                    usuario_email="SISTEMA_CRON",
-                    rol_usuario="SISTEMA",
-                    tipo_accion="PRELIQUIDACION_MASIVA",
-                    detalles={"periodo": periodo_liq, "quincena": quincena_pago, "empleados_afectados": len(nuevas_novedades)}
-                )
-                db.add(auditoria)
-                db.commit()
-            
-            mail_from = os.environ.get("MAIL_FROM", "nomina@unifika.co")
-            if resend.api_key and not dry_run:
-                for email_aportante, contratos in empleadores_afectados.items():
-                    attachments = []
-                    for id_contrato in contratos:
-                        try:
-                            query_pdf = text("""
-                                SELECT e.*, n.*, 
-                                       n.salario_base as salario_base_novedad,
-                                       n.vlr_bono as vlr_bono_novedad,
-                                       n.sal_especie as sal_especie_novedad,
-                                       n.prestamos as prestamos_novedad,
-                                       a.razon_social as razon_social,
-                                       a.tipo_documento as tipo_documento,
-                                       a.id_aportante as id_aportante
-                                FROM m_empleados e
-                                JOIN t_novedades n ON e.id_contrato = n.id_contrato
-                                LEFT JOIN m_aportantes a ON e.id_aportante = a.id_aportante
-                                WHERE e.id_contrato = :id_contrato
-                                  AND n.periodo_liq = :periodo
-                                  AND n.quincena_pago = :quincena
-                            """)
-                            row = db.execute(query_pdf, {"id_contrato": id_contrato, "periodo": periodo_liq, "quincena": quincena_pago}).mappings().first()
-                            
-                            if row:
-                                row_dict = {k.upper(): v for k, v in dict(row).items()}
-                                if 'SALARIO_BASE_NOVEDAD' in row_dict and row_dict['SALARIO_BASE_NOVEDAD'] is not None:
-                                    row_dict['SALARIO_BASE'] = row_dict['SALARIO_BASE_NOVEDAD']
-                                if 'VLR_BONO_NOVEDAD' in row_dict and row_dict['VLR_BONO_NOVEDAD'] is not None:
-                                    row_dict['VALOR_BONO'] = row_dict['VLR_BONO_NOVEDAD']
-                                if 'SAL_ESPECIE_NOVEDAD' in row_dict and row_dict['SAL_ESPECIE_NOVEDAD'] is not None:
-                                    row_dict['SALARIO_ESPECIE_MES'] = row_dict['SAL_ESPECIE_NOVEDAD']
-                                if 'PRESTAMOS_NOVEDAD' in row_dict and row_dict['PRESTAMOS_NOVEDAD'] is not None:
-                                    row_dict['PRESTAMOS'] = row_dict['PRESTAMOS_NOVEDAD']
 
-                                if not row_dict.get('SAL_REF'):
-                                    row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in ['SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
-
-                                try:
-                                    res_liq = liquidar_nomina([row_dict], {})
-                                    if res_liq:
-                                        res_final = res_liq[0]
-                                        res_final['RAZON_SOCIAL'] = row_dict.get('RAZON_SOCIAL', 'SIN EMPRESA')
-                                        res_final['TIPO_DOCUMENTO'] = row_dict.get('TIPO_DOCUMENTO', 'NIT')
-                                        res_final['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
-                                        res_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
-                                        res_final['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
-                                        res_final['OBSERVACIONES'] = row_dict.get('OBSERVACIONES')
-                                        res_final['CARGO'] = row_dict.get('CARGO', 'NO ASIGNADO')
-                                        res_final['TIPO_CONTRATO'] = row_dict.get('TIPO_CONTRATO', '')
-                                        res_final['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
-                                        res_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
-                                        row_dict = res_final
-                                except Exception as eliq:
-                                    pass
-
-                                response_pdf = generar_comprobante(row_dict)
-                                pdf_bytes = response_pdf.body
-                                attachments.append({
-                                    "filename": f"Pre_liquidacion_{id_contrato}.pdf",
-                                    "content": list(pdf_bytes)
-                                })
-                        except Exception as e_pdf:
-                            logger.error(f"Error generando PDF para adjunto cron {id_contrato}: {e_pdf}")
-
-                    try:
-                        resend.Emails.send({
-                            "from": mail_from,
-                            "to": str(email_aportante),
-                            "subject": f"Pre-liquidación de Nómina Lista - {periodo_liq}",
-                            "html": f"<p>Adjunto encontrará el borrador de su pre-liquidación para la quincena {quincena_pago} del periodo {periodo_liq}. Por favor, ingrese a la plataforma para agregar novedades o aprobarla.</p>",
-                            "attachments": attachments
-                        })
-                    except Exception as e:
-                        logger.error(f"Error enviando correo de pre-liquidación a {email_aportante}: {e}")
-            elif dry_run:
-                for email_aportante in empleadores_afectados.keys():
-                    acciones_simuladas.append({
-                        "accion": "ENVIAR_CORREO",
-                        "destinatario": email_aportante
-                    })
-            
-            if dry_run:
-                return {"status": "success", "message": f"SIMULACIÓN: Pre-liquidación generada para {len(nuevas_novedades)} contratos.", "acciones_simuladas": acciones_simuladas}
-            return {"status": "success", "message": f"Pre-liquidación generada para {len(nuevas_novedades)} contratos."}
-            
-        elif accion == 'CERRAR':
-            query_sql = """
-                SELECT n.id_contrato 
-                FROM t_novedades n
-                LEFT JOIN t_cierres_nomina c ON n.id_contrato = c.id_contrato 
-                                            AND n.periodo_liq = c.periodo_liq 
-                                            AND n.quincena_pago = c.quincena_pago
-            """
-            params = {"periodo": periodo_liq, "quincena": quincena_pago}
-            
-            if target_aportante:
-                query_sql += """
-                INNER JOIN m_empleados e ON n.id_contrato = e.id_contrato
-                WHERE n.periodo_liq = :periodo
-                  AND n.quincena_pago = :quincena
-                  AND c.id_cierre IS NULL
-                  AND e.id_aportante = :target_aportante
-                """
-                params["target_aportante"] = target_aportante
-            else:
-                query_sql += """
-                WHERE n.periodo_liq = :periodo
-                  AND n.quincena_pago = :quincena
-                  AND c.id_cierre IS NULL
-                """
-                
-            query_pendientes = text(query_sql)
-            pendientes = db.execute(query_pendientes, params).fetchall()
-            
-            cierres = []
-            for row in pendientes:
-                cierres.append(models.CierreNomina(
-                    id_cierre=str(uuid.uuid4()),
-                    id_contrato=row[0],
-                    periodo_liq=periodo_liq,
-                    quincena_pago=quincena_pago,
-                    cerrado_por="SISTEMA_CRON"
-                ))
-                if dry_run:
-                    acciones_simuladas.append({
-                        "accion": "CERRAR_NOMINA",
-                        "id_contrato": row[0],
-                        "periodo": periodo_liq,
-                        "quincena": quincena_pago
-                    })
-                
-            if cierres:
-                if not dry_run:
-                    db.bulk_save_objects(cierres)
-                    auditoria = models.AuditoriaLog(
-                        usuario_email="SISTEMA_CRON",
-                        rol_usuario="SISTEMA",
-                        tipo_accion="CIERRE_AUTOMATICO",
-                        detalles={"periodo": periodo_liq, "quincena": quincena_pago, "cierres_realizados": len(cierres)}
-                    )
-                    db.add(auditoria)
-                    db.commit()
-            
-            if dry_run:
-                return {"status": "success", "message": f"SIMULACIÓN: Cierre automático aplicado a {len(cierres)} contratos.", "acciones_simuladas": acciones_simuladas}
-            return {"status": "success", "message": f"Cierre automático aplicado a {len(cierres)} contratos."}
-            
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error en procesar-ciclo ({accion}): {e}")
-        raise HTTPException(status_code=500, detail="Error en procesamiento masivo de ciclo.")
+    background_tasks.add_task(procesar_ciclo_background, dry_run, target_aportante, target_date_str)
+    return {"status": "processing", "message": "Proceso iniciado en segundo plano."}
