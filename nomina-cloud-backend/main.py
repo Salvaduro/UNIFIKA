@@ -1207,16 +1207,23 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
         except ValueError:
             row_dict['PRESTAMOS'] = 0.0
 
+    # Salvaguardar los valores inmutables históricos desde la base de datos
+    db_salud = float(row_dict.get('SALUD_4') or 0.0)
+    db_pension = float(row_dict.get('PENSION_4') or 0.0)
+    db_total_deducido = float(row_dict.get('TOTAL_DEDUCIDO') or 0.0)
+    db_total_devengado = float(row_dict.get('TOTAL_DEVENGADO') or 0.0)
+    db_neto_pagar = float(row_dict.get('NETO_PAGAR') or 0.0)
+    db_ibc_pila = float(row_dict.get('IBC_PILA') or 0.0)
+
     try:
-        # Re-liquidamos en vuelo para recuperar los campos detallados que no se guardan explícitamente en BD
+        # Re-liquidamos en vuelo EXCLUSIVAMENTE para recuperar el desglose visual (VAL_AUX_TTE, SUELDO_EFECTIVO, etc)
         resultado_liquidado = liquidar_nomina([row_dict], {})
         if resultado_liquidado:
             resultado_final = resultado_liquidado[0]
+            
             # Mezclar metadatos necesarios
-            resultado_final['RAZON_SOCIAL'] = row_dict.get(
-                'RAZON_SOCIAL', 'SIN EMPRESA')
-            resultado_final['TIPO_DOCUMENTO'] = row_dict.get(
-                'TIPO_DOCUMENTO', 'NIT')
+            resultado_final['RAZON_SOCIAL'] = row_dict.get('RAZON_SOCIAL', 'SIN EMPRESA')
+            resultado_final['TIPO_DOCUMENTO'] = row_dict.get('TIPO_DOCUMENTO', 'NIT')
             resultado_final['TIPO_EMPLEADOR'] = row_dict.get('TIPO_EMPLEADOR', '')
             resultado_final['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
             resultado_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
@@ -1227,14 +1234,32 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
             resultado_final['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
             resultado_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
             resultado_final['tipo_empleador'] = row_dict.get('TIPO_EMPLEADOR', '')
+            
+            # CRÍTICO: Sobreescritura de Inmutabilidad Histórica
+            resultado_final['SALUD_4'] = db_salud
+            resultado_final['PENSION_4'] = db_pension
+            resultado_final['TOTAL_DEDUCIDO'] = db_total_deducido
+            resultado_final['TOTAL_DEVENGADO'] = db_total_devengado
+            resultado_final['NETO_PAGAR'] = db_neto_pagar
+            resultado_final['IBC_PILA'] = db_ibc_pila
+            
             return generar_comprobante(resultado_final)
     except Exception:
         pass
-        # Fallback si falla liquidar_nomina, aseguramos SAL_REF para evitar error en divisor
+
+    # Fallback en caso de que falle liquidar_nomina
+    row_dict['SALUD_4'] = db_salud
+    row_dict['PENSION_4'] = db_pension
+    row_dict['TOTAL_DEDUCIDO'] = db_total_deducido
+    row_dict['TOTAL_DEVENGADO'] = db_total_devengado
+    row_dict['NETO_PAGAR'] = db_neto_pagar
+    row_dict['IBC_PILA'] = db_ibc_pila
+    
     if not row_dict.get('SAL_REF'):
-        row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in [
-            'SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
+        row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in ['SI', 'TRUE', '1'] else float(row_dict.get('SALARIO_BASE') or 0.0)
+
     row_dict['tipo_empleador'] = row_dict.get('TIPO_EMPLEADOR', '')
+
     return generar_comprobante(row_dict)
 
 
