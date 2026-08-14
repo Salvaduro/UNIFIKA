@@ -1156,6 +1156,7 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
                n.prestamos as prestamos_novedad,
                a.razon_social as razon_social,
                a.tipo_documento as tipo_documento,
+               a.tipo_empleador as tipo_empleador,
                a.id_aportante as id_aportante
         FROM m_empleados e
         JOIN t_novedades n ON e.id_contrato = n.id_contrato
@@ -1216,6 +1217,7 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
                 'RAZON_SOCIAL', 'SIN EMPRESA')
             resultado_final['TIPO_DOCUMENTO'] = row_dict.get(
                 'TIPO_DOCUMENTO', 'NIT')
+            resultado_final['TIPO_EMPLEADOR'] = row_dict.get('TIPO_EMPLEADOR', '')
             resultado_final['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
             resultado_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
             resultado_final['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
@@ -1224,7 +1226,7 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
             resultado_final['TIPO_CONTRATO'] = row_dict.get('TIPO_CONTRATO', '')
             resultado_final['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
             resultado_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
-
+            resultado_final['tipo_empleador'] = row_dict.get('TIPO_EMPLEADOR', '')
             return generar_comprobante(resultado_final)
     except Exception:
         pass
@@ -1232,6 +1234,7 @@ def descargar_desprendible_pdf(id_contrato: str, periodo_liq: str, quincena_pago
     if not row_dict.get('SAL_REF'):
         row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in [
             'SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
+    row_dict['tipo_empleador'] = row_dict.get('TIPO_EMPLEADOR', '')
     return generar_comprobante(row_dict)
 
 
@@ -1241,6 +1244,20 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     Regla de Infraestructura - Discos Efímeros en Render (Comprobante PDF en Memoria):
     - Genera el comprobante de nómina en memoria sin escribir en disco físico.
     """
+    
+    # Inyectar tipo_empleador si no viene en el payload (caso frontend directo)
+    if not row.get("tipo_empleador") and not row.get("TIPO_EMPLEADOR"):
+        id_aportante = row.get("ID_APORTANTE") or row.get("id_aportante")
+        if id_aportante:
+            db_session = SessionLocal()
+            try:
+                aportante = db_session.query(models.Aportante).filter(models.Aportante.id_aportante == id_aportante).first()
+                row["tipo_empleador"] = aportante.tipo_empleador if aportante else ""
+            except Exception as e:
+                pass
+            finally:
+                db_session.close()
+
     HR_MES = 210
     factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
                      'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
@@ -1262,10 +1279,13 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     sal_ref_fila = forzar_numero(row.get('SAL_REF', 0))
     v_hora_fila = sal_ref_fila / HR_MES
 
+    tipo_emp = str(row.get("tipo_empleador") or row.get("TIPO_EMPLEADOR") or "").strip().lower()
+    texto_tipo_persona = "PERSONA NATURAL" if tipo_emp == "hogar" else "PERSONA JURÍDICA"
+
     datos_emp = {
         'nombre': str(row.get('RAZON_SOCIAL') or 'EMPRESA NO ENCONTRADA'),
         'nit': str(row.get('ID_APORTANTE') or '000.000.000-0'),
-        'tipo': str(row.get('TIPO_DOCUMENTO') or 'PERSONA JURÍDICA')
+        'tipo': texto_tipo_persona
     }
 
     pdf = ComprobantePDF(datos_emp, texto_periodo)
@@ -1475,6 +1495,7 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
                        n.prestamos as prestamos_novedad,
                        a.razon_social as razon_social,
                        a.tipo_documento as tipo_documento,
+                       a.tipo_empleador as tipo_empleador,
                        a.id_aportante as id_aportante
                 FROM m_empleados e
                 JOIN t_novedades n ON e.id_contrato = n.id_contrato
@@ -1549,12 +1570,13 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
                 res_liq = liquidar_nomina([row_dict], {})
                 if res_liq:
                     res_final = res_liq[0]
-                    for k in ['RAZON_SOCIAL', 'TIPO_DOCUMENTO', 'ID_APORTANTE', 'NOMBRE_EMPLEADO', 'ID_EMPLEADO', 'T_ID_EMPLEADO', 'CARGO', 'TIPO_CONTRATO', 'PERIODO_LIQ', 'QUINCENA_PAGO', 'OBSERVACIONES']:
+                    for k in ['RAZON_SOCIAL', 'TIPO_DOCUMENTO', 'TIPO_EMPLEADOR', 'ID_APORTANTE', 'NOMBRE_EMPLEADO', 'ID_EMPLEADO', 'T_ID_EMPLEADO', 'CARGO', 'TIPO_CONTRATO', 'PERIODO_LIQ', 'QUINCENA_PAGO', 'OBSERVACIONES']:
                         res_final[k] = row_dict.get(k, '')
                     row_dict = res_final
             except Exception as eliq:
                 pass
 
+            row_dict['tipo_empleador'] = row_dict.get('TIPO_EMPLEADOR', '')
             response_pdf = generar_comprobante(row_dict)
             pdf_bytes = response_pdf.body
             
@@ -1927,122 +1949,105 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                     return
                     
                 nuevas_novedades = []
-                empleadores_afectados = {}
+                mail_from = os.environ.get("MAIL_FROM", "nomina@unifika.co")
                 
                 for emp in activos:
-                    ultima_nov = db.query(models.Novedad).filter(
-                        models.Novedad.id_contrato == emp.id_contrato
-                    ).order_by(models.Novedad.created_at.desc()).first()
-                    
-                    # Fuente de la verdad (m_empleados) y regla inmutable de especie
-                    tipo_contrato_str = str(emp.tipo_contrato).strip().upper()
-                    if "EMPLEADO INTERNO" in tipo_contrato_str:
-                        sal_especie_aplicar = emp.sal_especie
-                    else:
-                        sal_especie_aplicar = 0
-                    
-                    if ultima_nov:
-                        nueva_nov = models.Novedad(
-                            id_novedad=str(uuid.uuid4()),
-                            id_contrato=emp.id_contrato,
-                            periodo_liq=periodo_liq,
-                            quincena_pago=quincena_pago,
-                            generar_nomina=True,
-                            hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
-                            dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
-                            dias_laborados=ultima_nov.dias_laborados,
-                            horas_laboradas=ultima_nov.horas_laboradas,
-                            prima_calc=ultima_nov.prima_calc,
-                            salario_base=emp.salario_base,
-                            vlr_bono=emp.vlr_bono,
-                            sal_especie=sal_especie_aplicar,
-                            observaciones="Pre-liquidación automática"
-                        )
-                    else:
-                        nueva_nov = models.Novedad(
-                            id_novedad=str(uuid.uuid4()),
-                            id_contrato=emp.id_contrato,
-                            periodo_liq=periodo_liq,
-                            quincena_pago=quincena_pago,
-                            generar_nomina=True,
-                            hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
-                            dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
-                            dias_laborados=0,
-                            horas_laboradas=0,
-                            prima_calc=0,
-                            salario_base=emp.salario_base,
-                            vlr_bono=emp.vlr_bono,
-                            sal_especie=sal_especie_aplicar,
-                            observaciones="Pre-liquidación automática inicial"
-                        )
-                    
-                    # Calcular totales financieros en vuelo
-                    row_dict_calc = {
-                        "ES_SMLV": emp.es_smlv,
-                        "CON_BONO": emp.con_bono,
-                        "TIENE_AUX": emp.tiene_aux,
-                        "TIPO_CONTRATO": emp.tipo_contrato,
-                        "ESTADO_EMPLEADO": emp.estado_empleado,
-                        "PERIODO_PAGO": emp.periodo_pago,
-                        "SALARIO_BASE": emp.salario_base,
-                        "VLR_BONO": emp.vlr_bono,
-                        "SALARIO_ESPECIE": sal_especie_aplicar,
-                        "EPS": emp.eps,
-                        "FONDO_PENSIONES": emp.afp,
-                        "DIAS_LABORADOS": nueva_nov.dias_laborados or 0,
-                        "HORAS_LABORADAS": nueva_nov.horas_laboradas or 0,
-                        "DIAS_VACACIONES": 0,
-                        "DIAS_INCAPACIDAD": 0,
-                        "PRESTAMOS": 0,
-                        "PRIMA_CALC": nueva_nov.prima_calc or 0,
-                        "HED": 0, "HEN": 0, "HEDF": 0, "HENF": 0, "RN": 0, "RDN": 0, "RNF": 0
-                    }
-                    
                     try:
-                        res_liq = liquidar_nomina([row_dict_calc], {})
-                        if res_liq:
-                            res_final = res_liq[0]
-                            nueva_nov.ibc_pila = res_final.get("IBC_PILA", 0)
-                            nueva_nov.salud_4 = res_final.get("SALUD_4", 0)
-                            nueva_nov.pension_4 = res_final.get("PENSION_4", 0)
-                            nueva_nov.total_devengado = res_final.get("TOTAL_DEVENGADO", 0)
-                            nueva_nov.total_deducido = res_final.get("TOTAL_DEDUCIDO", 0)
-                            nueva_nov.neto_pagar = res_final.get("NETO_PAGAR", 0)
-                    except Exception as e_liq:
-                        logger.error(f"Error calculando totales en cron para {emp.id_contrato}: {e_liq}")
-                        
-                    nuevas_novedades.append(nueva_nov)
-                    if dry_run:
-                        acciones_simuladas.append({
-                            "accion": "CREAR_NOVEDAD",
-                            "id_contrato": emp.id_contrato,
-                            "periodo": periodo_liq,
-                            "quincena": quincena_pago
-                        })
-                    
-                    if emp.aportante and emp.aportante.email:
-                        email_apo = str(emp.aportante.email)
-                        if email_apo not in empleadores_afectados:
-                            empleadores_afectados[email_apo] = []
-                        empleadores_afectados[email_apo].append(emp.id_contrato)
-                    
-                if not dry_run:
-                    db.bulk_save_objects(nuevas_novedades)
-                    auditoria = models.AuditoriaLog(
-                        usuario_email="SISTEMA_CRON",
-                        rol_usuario="SISTEMA",
-                        tipo_accion="PRELIQUIDACION_MASIVA",
-                        detalles={"periodo": periodo_liq, "quincena": quincena_pago, "empleados_afectados": len(nuevas_novedades)}
-                    )
-                    db.add(auditoria)
-                    db.commit()
-                
-                mail_from = os.environ.get("MAIL_FROM", "nomina@unifika.co")
-                if resend.api_key and not dry_run:
-                    for email_aportante, contratos in empleadores_afectados.items():
-                        attachments = []
-                        for id_contrato in contratos:
-                            try:
+                        # Prevención de Duplicados
+                        existente = db.query(models.Novedad).filter_by(
+                            id_contrato=emp.id_contrato,
+                            periodo_liq=periodo_liq,
+                            quincena_pago=quincena_pago
+                        ).first()
+                        if existente:
+                            continue
+
+                        with db.begin_nested():
+                            ultima_nov = db.query(models.Novedad).filter(
+                                models.Novedad.id_contrato == emp.id_contrato
+                            ).order_by(models.Novedad.created_at.desc()).first()
+                            
+                            # Fuente de la verdad (m_empleados) y regla inmutable de especie
+                            tipo_contrato_str = str(emp.tipo_contrato).strip().upper()
+                            if "EMPLEADO INTERNO" in tipo_contrato_str:
+                                sal_especie_aplicar = emp.sal_especie
+                            else:
+                                sal_especie_aplicar = 0
+                            
+                            if ultima_nov:
+                                nueva_nov = models.Novedad(
+                                    id_novedad=str(uuid.uuid4()),
+                                    id_contrato=emp.id_contrato,
+                                    periodo_liq=periodo_liq,
+                                    quincena_pago=quincena_pago,
+                                    generar_nomina=True,
+                                    hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
+                                    dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
+                                    dias_laborados=ultima_nov.dias_laborados,
+                                    horas_laboradas=ultima_nov.horas_laboradas,
+                                    prima_calc=ultima_nov.prima_calc,
+                                    salario_base=emp.salario_base,
+                                    vlr_bono=emp.vlr_bono,
+                                    sal_especie=sal_especie_aplicar,
+                                    observaciones="Pre-liquidación automática"
+                                )
+                            else:
+                                nueva_nov = models.Novedad(
+                                    id_novedad=str(uuid.uuid4()),
+                                    id_contrato=emp.id_contrato,
+                                    periodo_liq=periodo_liq,
+                                    quincena_pago=quincena_pago,
+                                    generar_nomina=True,
+                                    hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
+                                    dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
+                                    dias_laborados=0,
+                                    horas_laboradas=0,
+                                    prima_calc=0,
+                                    salario_base=emp.salario_base,
+                                    vlr_bono=emp.vlr_bono,
+                                    sal_especie=sal_especie_aplicar,
+                                    observaciones="Pre-liquidación automática inicial"
+                                )
+                            
+                            # Calcular totales financieros en vuelo
+                            row_dict_calc = {
+                                "ES_SMLV": emp.es_smlv,
+                                "CON_BONO": emp.con_bono,
+                                "TIENE_AUX": emp.tiene_aux,
+                                "TIPO_CONTRATO": emp.tipo_contrato,
+                                "ESTADO_EMPLEADO": emp.estado_empleado,
+                                "PERIODO_PAGO": emp.periodo_pago,
+                                "SALARIO_BASE": emp.salario_base,
+                                "VLR_BONO": emp.vlr_bono,
+                                "SALARIO_ESPECIE": sal_especie_aplicar,
+                                "EPS": emp.eps,
+                                "FONDO_PENSIONES": emp.afp,
+                                "DIAS_LABORADOS": nueva_nov.dias_laborados or 0,
+                                "HORAS_LABORADAS": nueva_nov.horas_laboradas or 0,
+                                "DIAS_VACACIONES": 0,
+                                "DIAS_INCAPACIDAD": 0,
+                                "PRESTAMOS": 0,
+                                "PRIMA_CALC": nueva_nov.prima_calc or 0,
+                                "HED": 0, "HEN": 0, "HEDF": 0, "HENF": 0, "RN": 0, "RDN": 0, "RNF": 0
+                            }
+                            
+                            res_liq = liquidar_nomina([row_dict_calc], {})
+                            if res_liq:
+                                res_final = res_liq[0]
+                                nueva_nov.ibc_pila = res_final.get("IBC_PILA", 0)
+                                nueva_nov.salud_4 = res_final.get("SALUD_4", 0)
+                                nueva_nov.pension_4 = res_final.get("PENSION_4", 0)
+                                nueva_nov.total_devengado = res_final.get("TOTAL_DEVENGADO", 0)
+                                nueva_nov.total_deducido = res_final.get("TOTAL_DEDUCIDO", 0)
+                                nueva_nov.neto_pagar = res_final.get("NETO_PAGAR", 0)
+                                
+                            if not dry_run:
+                                db.add(nueva_nov)
+                                db.flush()
+                                
+                            if not dry_run and resend.api_key and emp.aportante and emp.aportante.email:
+                                email_aportante = str(emp.aportante.email)
+                                attachments = []
                                 query_pdf = text("""
                                     SELECT e.*, n.*, 
                                            n.salario_base as salario_base_novedad,
@@ -2051,6 +2056,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                            n.prestamos as prestamos_novedad,
                                            a.razon_social as razon_social,
                                            a.tipo_documento as tipo_documento,
+                                           a.tipo_empleador as tipo_empleador,
                                            a.id_aportante as id_aportante
                                     FROM m_empleados e
                                     JOIN t_novedades n ON e.id_contrato = n.id_contrato
@@ -2059,10 +2065,10 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                       AND n.periodo_liq = :periodo
                                       AND n.quincena_pago = :quincena
                                 """)
-                                row = db.execute(query_pdf, {"id_contrato": id_contrato, "periodo": periodo_liq, "quincena": quincena_pago}).mappings().first()
+                                row_pdf = db.execute(query_pdf, {"id_contrato": emp.id_contrato, "periodo": periodo_liq, "quincena": quincena_pago}).mappings().first()
                                 
-                                if row:
-                                    row_dict = {k.upper(): v for k, v in dict(row).items()}
+                                if row_pdf:
+                                    row_dict = {k.upper(): v for k, v in dict(row_pdf).items()}
                                     if 'SALARIO_BASE_NOVEDAD' in row_dict and row_dict['SALARIO_BASE_NOVEDAD'] is not None:
                                         row_dict['SALARIO_BASE'] = row_dict['SALARIO_BASE_NOVEDAD']
                                     if 'VLR_BONO_NOVEDAD' in row_dict and row_dict['VLR_BONO_NOVEDAD'] is not None:
@@ -2076,58 +2082,78 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                         row_dict['SAL_REF'] = 1750905 if str(row_dict.get('ES_SMLV')).upper() in ['SI', 'TRUE', '1'] else row_dict.get('SALARIO_BASE', 0)
 
                                     try:
-                                        res_liq = liquidar_nomina([row_dict], {})
-                                        if res_liq:
-                                            res_final = res_liq[0]
-                                            res_final['RAZON_SOCIAL'] = row_dict.get('RAZON_SOCIAL', 'SIN EMPRESA')
-                                            res_final['TIPO_DOCUMENTO'] = row_dict.get('TIPO_DOCUMENTO', 'NIT')
-                                            res_final['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
-                                            res_final['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
-                                            res_final['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
-                                            res_final['OBSERVACIONES'] = row_dict.get('OBSERVACIONES')
-                                            res_final['CARGO'] = row_dict.get('CARGO', 'NO ASIGNADO')
-                                            res_final['TIPO_CONTRATO'] = row_dict.get('TIPO_CONTRATO', '')
-                                            res_final['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
-                                            res_final['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
-                                            row_dict = res_final
+                                        res_liq_pdf = liquidar_nomina([row_dict], {})
+                                        if res_liq_pdf:
+                                            res_final_pdf = res_liq_pdf[0]
+                                            res_final_pdf['RAZON_SOCIAL'] = row_dict.get('RAZON_SOCIAL', 'SIN EMPRESA')
+                                            res_final_pdf['TIPO_DOCUMENTO'] = row_dict.get('TIPO_DOCUMENTO', 'NIT')
+                                            res_final_pdf['TIPO_EMPLEADOR'] = row_dict.get('TIPO_EMPLEADOR', '')
+                                            res_final_pdf['ID_APORTANTE'] = row_dict.get('ID_APORTANTE', '')
+                                            res_final_pdf['PERIODO_LIQ'] = row_dict.get('PERIODO_LIQ')
+                                            res_final_pdf['QUINCENA_PAGO'] = row_dict.get('QUINCENA_PAGO')
+                                            res_final_pdf['OBSERVACIONES'] = row_dict.get('OBSERVACIONES')
+                                            res_final_pdf['CARGO'] = row_dict.get('CARGO', 'NO ASIGNADO')
+                                            res_final_pdf['TIPO_CONTRATO'] = row_dict.get('TIPO_CONTRATO', '')
+                                            res_final_pdf['T_ID_EMPLEADO'] = row_dict.get('T_ID_EMPLEADO', '')
+                                            res_final_pdf['ID_EMPLEADO'] = row_dict.get('ID_EMPLEADO', '')
+                                            row_dict = res_final_pdf
                                     except Exception as eliq:
                                         pass
 
+                                    row_dict['tipo_empleador'] = row_dict.get('TIPO_EMPLEADOR', '')
                                     response_pdf = generar_comprobante(row_dict)
                                     pdf_bytes = response_pdf.body
                                     attachments.append({
-                                        "filename": f"Pre_liquidacion_{id_contrato}.pdf",
+                                        "filename": f"Pre_liquidacion_{emp.id_contrato}.pdf",
                                         "content": list(pdf_bytes)
                                     })
-                            except Exception as e_pdf:
-                                logger.error(f"Error generando PDF para adjunto cron {id_contrato}: {e_pdf}")
-
-                        try:
-                            html_content = f"""
-                            <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
-                                <p>Adjunto encontrará el borrador de su pre-liquidación para la quincena {quincena_pago} del periodo {periodo_liq}.</p>
-                                <p><strong>Por motivos de seguridad y auditoría, para aprobar esta nómina o realizar ajustes, por favor inicie sesión en la plataforma haciendo clic en los botones.</strong></p>
-                                <div style="margin-top: 25px;">
-                                    <a href="https://app.unifika.co/" style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-right: 15px; font-weight: bold; display: inline-block;">Aprobada</a>
-                                    <a href="https://app.unifika.co/" style="background-color: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Deseo ajustar información</a>
+                                
+                                html_content = f"""
+                                <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
+                                    <p>Adjunto encontrará el borrador de su pre-liquidación para la quincena {quincena_pago} del periodo {periodo_liq}.</p>
+                                    <p><strong>Por motivos de seguridad y auditoría, para aprobar esta nómina o realizar ajustes, por favor inicie sesión en la plataforma haciendo clic en los botones.</strong></p>
+                                    <div style="margin-top: 25px;">
+                                        <a href="https://app.unifika.co/" style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-right: 15px; font-weight: bold; display: inline-block;">Aprobada</a>
+                                        <a href="https://app.unifika.co/" style="background-color: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Deseo ajustar información</a>
+                                    </div>
                                 </div>
-                            </div>
-                            """
-                            resend.Emails.send({
-                                "from": mail_from,
-                                "to": str(email_aportante),
-                                "subject": f"Pre-liquidación de Nómina Lista - {periodo_liq}",
-                                "html": html_content,
-                                "attachments": attachments
+                                """
+                                resend.Emails.send({
+                                    "from": mail_from,
+                                    "to": email_aportante,
+                                    "subject": f"Pre-liquidación de Nómina Lista - {periodo_liq}",
+                                    "html": html_content,
+                                    "attachments": attachments
+                                })
+                        
+                        # Si llegamos aquí sin excepciones, agregamos a la lista general
+                        nuevas_novedades.append(nueva_nov)
+                        if dry_run:
+                            acciones_simuladas.append({
+                                "accion": "CREAR_NOVEDAD",
+                                "id_contrato": emp.id_contrato,
+                                "periodo": periodo_liq,
+                                "quincena": quincena_pago
                             })
-                        except Exception as e:
-                            logger.error(f"Error enviando correo de pre-liquidación a {email_aportante}: {e}")
-                elif dry_run:
-                    for email_aportante in empleadores_afectados.keys():
-                        acciones_simuladas.append({
-                            "accion": "ENVIAR_CORREO",
-                            "destinatario": email_aportante
-                        })
+                            if emp.aportante and emp.aportante.email:
+                                acciones_simuladas.append({
+                                    "accion": "ENVIAR_CORREO",
+                                    "destinatario": emp.aportante.email
+                                })
+
+                    except Exception as e:
+                        logger.error(f"Fallo individual en pre-liquidación para contrato {emp.id_contrato}: {e}")
+                        continue
+                
+                if not dry_run and nuevas_novedades:
+                    auditoria = models.AuditoriaLog(
+                        usuario_email="SISTEMA_CRON",
+                        rol_usuario="SISTEMA",
+                        tipo_accion="PRELIQUIDACION_MASIVA",
+                        detalles={"periodo": periodo_liq, "quincena": quincena_pago, "empleados_afectados": len(nuevas_novedades)}
+                    )
+                    db.add(auditoria)
+                    db.commit()
                 
                 if dry_run:
                     logger.info(f"Cron procesar_ciclo_background SIMULACIÓN: Pre-liquidación generada para {len(nuevas_novedades)} contratos. Simuladas: {len(acciones_simuladas)}")
