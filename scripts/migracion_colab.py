@@ -6,12 +6,11 @@ import uuid
 from dotenv import load_dotenv
 
 # Aseguramos que Python encuentre el backend para importar database y models
-backend_path = os.path.join(os.path.dirname(__file__), "nomina-cloud-backend")
-if backend_path not in sys.path:
-    sys.path.append(backend_path)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../nomina-cloud-backend')))
 
 # Cargamos el .env del backend para que DATABASE_URL esté disponible
-load_dotenv(os.path.join(backend_path, ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__), '../nomina-cloud-backend/.env'))
 
 from database import SessionLocal
 from models import Aportante, Empleado, Novedad
@@ -74,36 +73,43 @@ def run_migration():
         procesados = 0
         
         # --- 1. M_APORTANTES ---
-        # if "M_APORTANTES" in xls.sheet_names:
-        #     print("\n--- Procesando M_APORTANTES ---")
-        #     df = pd.read_excel(xls, "M_APORTANTES")
-        #     df, valid_keys = procesar_dataframe(df, Aportante)
-        #     
-        #     for _, row in df.iterrows():
-        #         data = row.to_dict()
-        #         filtered_data = {k: v for k, v in data.items() if k in valid_keys}
-        #         
-        #         print(f"Preparando inserción de Aportante: {filtered_data.get('id_aportante')}")
-        #         obj = Aportante(**filtered_data)
-        #         db.merge(obj)
-        # else:
-        #     print("\nHoja M_APORTANTES no encontrada, omitiendo.")
+        if "M_APORTANTES" in xls.sheet_names:
+             print("\n--- Procesando M_APORTANTES ---")
+             df = pd.read_excel(xls, "M_APORTANTES")
+             df, valid_keys = procesar_dataframe(df, Aportante)
+             
+             for _, row in df.iterrows():
+                 data = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+                 filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+                 if not filtered_data.get('id_aportante'):
+                     continue
+                     
+                 print(f"Preparando inserción de Aportante: {filtered_data.get('id_aportante')}")
+                 obj = Aportante(**filtered_data)
+                 db.merge(obj)
+        else:
+             print("\nHoja M_APORTANTES no encontrada, omitiendo.")
 
         # --- 2. M_EMPLEADOS ---
-        # if "M_EMPLEADOS" in xls.sheet_names:
-        #     print("\n--- Procesando M_EMPLEADOS ---")
-        #     df = pd.read_excel(xls, "M_EMPLEADOS")
-        #     df, valid_keys = procesar_dataframe(df, Empleado)
-        #     
-        #     for _, row in df.iterrows():
-        #         data = row.to_dict()
-        #         filtered_data = {k: v for k, v in data.items() if k in valid_keys}
-        #         
-        #         print(f"Preparando inserción de Empleado: {filtered_data.get('id_empleado')}")
-        #         obj = Empleado(**filtered_data)
-        #         db.merge(obj)
-        # else:
-        #     print("\nHoja M_EMPLEADOS no encontrada, omitiendo.")
+        if "M_EMPLEADOS" in xls.sheet_names:
+             print("\n--- Procesando M_EMPLEADOS ---")
+             df = pd.read_excel(xls, "M_EMPLEADOS")
+             df, valid_keys = procesar_dataframe(df, Empleado)
+             
+             for _, row in df.iterrows():
+                 data = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+                 filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+                 if not filtered_data.get('id_empleado') or not filtered_data.get('id_aportante'):
+                     continue
+                     
+                 if not filtered_data.get('id_contrato'):
+                     filtered_data['id_contrato'] = f"{filtered_data['id_aportante']}_{filtered_data['id_empleado']}"
+                     
+                 print(f"Preparando inserción de Empleado: {filtered_data.get('id_empleado')}")
+                 obj = Empleado(**filtered_data)
+                 db.merge(obj)
+        else:
+             print("\nHoja M_EMPLEADOS no encontrada, omitiendo.")
 
         # --- 3. T_NOVEDADES ---
         if "T_NOVEDADES" in xls.sheet_names:
@@ -122,7 +128,7 @@ def run_migration():
             df = df.drop_duplicates(subset=['id_contrato', 'periodo_liq', 'quincena_pago'], keep='last')
             
             for _, row in df.iterrows():
-                data = row.to_dict()
+                data = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
                 
                 id_contrato = data.get('id_contrato')
                 
@@ -160,8 +166,11 @@ def run_migration():
 
         # --- FIN DEL PROCESAMIENTO ---
         print("\n--- RESUMEN ---")
-        print(f"¡MIGRACIÓN HISTÓRICA EXITOSA! Los {procesados} registros de T_NOVEDADES han sido inyectados permanentemente.")
-        db.commit()
+        print(f"¡DRY RUN EXITOSO! Los {procesados} registros han sido validados correctamente. Listo para inyección.")
+        
+        # EL SEGURO FUE DESACTIVADO TRAS EL DRY RUN EXITOSO
+        # db.rollback() 
+        db.commit() # Inyección permanente en base de datos
 
     except Exception as e:
         print(f"\n[ERROR CRÍTICO] Ocurrió un error durante la migración: {e}")

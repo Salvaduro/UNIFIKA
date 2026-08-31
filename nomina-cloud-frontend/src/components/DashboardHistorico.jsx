@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { apiClient } from "../lib/apiClient";
+import { toast } from "react-hot-toast";
 
 export default function DashboardHistorico({ idAportante }) {
   const [periodos, setPeriodos] = useState([]);
@@ -83,7 +84,7 @@ export default function DashboardHistorico({ idAportante }) {
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Error al descargar PDF:", err);
-      alert("Hubo un error al generar el PDF. Por favor, intenta de nuevo.");
+      toast.error("Hubo un error al generar el PDF. Por favor, intenta de nuevo.");
     } finally {
       setIsDownloading(false);
     }

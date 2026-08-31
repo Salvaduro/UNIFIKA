@@ -9,6 +9,7 @@ import DashboardAuditoria from "./components/DashboardAuditoria";
 import IdleTimer from "./components/IdleTimer";
 import { supabase } from "./lib/supabaseClient";
 import { apiClient } from "./lib/apiClient";
+import toast, { Toaster } from "react-hot-toast";
 
 const generarPeriodos = () => {
   const periodos = [];
@@ -173,6 +174,7 @@ function App() {
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState("");
   const [isContractOpen, setIsContractOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("liquidacion");
+  const [refreshResumenKey, setRefreshResumenKey] = useState(0);
 
   // Efecto para cargar el perfil al iniciar sesión
   useEffect(() => {
@@ -231,8 +233,10 @@ function App() {
           if (res.status === 403) {
             await supabase.auth.signOut();
             localStorage.clear();
-            alert(errorMsg);
-            window.location.reload();
+            toast.error(errorMsg);
+            setTimeout(() => {
+              window.location.reload();
+            }, 2000);
             return;
           }
           setPerfilError(errorMsg);
@@ -572,12 +576,14 @@ function App() {
       if (data.status === "success" && data.data) {
         autocompletarFormulario(data.data);
         setEmpleadosEncontrados(prev => prev.map(emp => emp.ID_CONTRATO === idContrato ? data.data : emp));
+        toast.success("Empleado sincronizado y cálculos actualizados");
+        setRefreshResumenKey(prev => prev + 1);
       } else {
         throw new Error("Respuesta del servidor sin status success o sin data");
       }
     } catch (error) {
       console.error("Error al sincronizar empleado:", error);
-      alert("Hubo un error sincronizando el empleado con el CRM.");
+      toast.error("Hubo un error sincronizando el empleado con el CRM.");
     } finally {
       setIsSyncing(false);
     }
@@ -637,13 +643,13 @@ function App() {
           EPS: "",
           FONDO_PENSIONES: "",
         });
-        alert("Sincronización masiva con el CRM completada exitosamente.");
+        toast.success("Sincronización masiva con el CRM completada exitosamente.");
       } else {
         throw new Error("Respuesta inválida del servidor en sincronización masiva");
       }
     } catch (error) {
       console.error("Error al forzar sincronización masiva con el CRM:", error);
-      alert(`Hubo un error en la sincronización masiva: ${error.message || "Error desconocido"}`);
+      toast.error(`Hubo un error en la sincronización masiva: ${error.message || "Error desconocido"}`);
     } finally {
       setIsSyncingMasivo(false);
     }
@@ -1016,6 +1022,7 @@ function App() {
   // ==========================================
   return (
     <IdleTimer>
+      <Toaster position="top-right" />
       <div className="min-h-screen bg-slate-50 font-sans flex flex-col">
         <nav className="bg-unifika-primary shadow-lg sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -2263,6 +2270,7 @@ function App() {
               idAportante={empleadorId}
               onRowClick={handleRowClick}
               perfilAportante={perfilAportante}
+              refreshKey={refreshResumenKey}
             />
           )}
 

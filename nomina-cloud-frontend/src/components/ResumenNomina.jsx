@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { apiClient } from "../lib/apiClient";
+import { toast } from "react-hot-toast";
+import ConfirmModal from "./ConfirmModal";
 
 export default function ResumenNomina({
   periodo,
@@ -7,6 +9,7 @@ export default function ResumenNomina({
   idAportante,
   onRowClick,
   perfilAportante,
+  refreshKey,
 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -15,6 +18,18 @@ export default function ResumenNomina({
   const [isClosing, setIsClosing] = useState(false);
   const [isReopening, setIsReopening] = useState(false);
   const [isSendingEmails, setIsSendingEmails] = useState(false);
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: null,
+    isDestructive: false,
+    confirmText: "Aceptar"
+  });
+
+  const closeConfirmModal = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+  };
 
   useEffect(() => {
     if (!periodo || !quincena) return;
@@ -50,7 +65,7 @@ export default function ResumenNomina({
     };
 
     fetchResumen();
-  }, [periodo, quincena]);
+  }, [periodo, quincena, refreshKey]);
 
   if (loading) {
     return (
@@ -114,134 +129,208 @@ export default function ResumenNomina({
     return `Ciclo ${ciclo}`;
   };
 
-  const handleReabrirNomina = async () => {
-    if (
-      !window.confirm(
-        "¿Estás seguro de reabrir esta nómina? Esto anulará la inmutabilidad para el personal de este periodo y quincena."
-      )
-    ) {
-      return;
-    }
-
+  const handleReabrirNomina = () => {
     if (!empleados || empleados.length === 0) {
-      alert("No hay empleados en este resumen para reabrir.");
+      toast.error("No hay empleados en este resumen para reabrir.");
       return;
     }
 
-    setIsReopening(true);
-    try {
-      for (const emp of empleados) {
-        const payload = {
-          periodo: String(periodo).toUpperCase().trim(),
-          quincena: String(quincena).trim(),
-          id_contrato: emp.id_contrato,
-        };
+    setConfirmModal({
+      isOpen: true,
+      title: "Reabrir Nómina",
+      message: "¿Estás seguro de reabrir esta nómina? Esto anulará la inmutabilidad para el personal de este periodo y quincena.",
+      confirmText: "Reabrir",
+      isDestructive: true,
+      onConfirm: async () => {
+        closeConfirmModal();
+        setIsReopening(true);
+        try {
+          for (const emp of empleados) {
+            const payload = {
+              periodo: String(periodo).toUpperCase().trim(),
+              quincena: String(quincena).trim(),
+              id_contrato: emp.id_contrato,
+            };
 
-        const response = await apiClient(
-          `${import.meta.env.VITE_API_URL}/api/v1/nomina/reabrir`,
-          {
-            method: "DELETE",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
+            const response = await apiClient(
+              `${import.meta.env.VITE_API_URL}/api/v1/nomina/reabrir`,
+              {
+                method: "DELETE",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(payload),
+              }
+            );
+
+            if (!response.ok) {
+              let errData = {};
+              try {
+                errData = await response.json();
+              } catch (e) {}
+              const errorObj = new Error(errData.detail || "Error al reabrir la nómina");
+              errorObj.response = { data: errData };
+              throw errorObj;
+            }
           }
-        );
 
-        if (!response.ok) {
-          let errData = {};
-          try {
-            errData = await response.json();
-          } catch (e) {}
-          const errorObj = new Error(errData.detail || "Error al reabrir la nómina");
-          errorObj.response = { data: errData };
-          throw errorObj;
+          setIsCerrado(false);
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  totales: {
+                    ...prev.totales,
+                    todos_cerrados: false,
+                    total_cerrados: 0,
+                  },
+                  empleados: prev.empleados.map((e) => ({
+                    ...e,
+                    esta_cerrado: false,
+                  })),
+                }
+              : prev
+          );
+          toast.success("Nómina reabierta exitosamente.");
+        } catch (error) {
+          console.error("Error al reabrir nómina:", error);
+          const detail =
+            error.response?.data?.detail ||
+            error.message ||
+            "Error desconocido al reabrir la nómina";
+          const errorMessage =
+            typeof detail === "string" ? detail : JSON.stringify(detail);
+          toast.error(errorMessage);
+        } finally {
+          setIsReopening(false);
         }
       }
-
-      setIsCerrado(false);
-      setData((prev) =>
-        prev
-          ? {
-              ...prev,
-              totales: {
-                ...prev.totales,
-                todos_cerrados: false,
-                total_cerrados: 0,
-              },
-              empleados: prev.empleados.map((e) => ({
-                ...e,
-                esta_cerrado: false,
-              })),
-            }
-          : prev
-      );
-      alert("Nómina reabierta exitosamente.");
-    } catch (error) {
-      console.error("Error al reabrir nómina:", error);
-      const detail =
-        error.response?.data?.detail ||
-        error.message ||
-        "Error desconocido al reabrir la nómina";
-      const errorMessage =
-        typeof detail === "string" ? detail : JSON.stringify(detail);
-      alert(errorMessage);
-    } finally {
-      setIsReopening(false);
-    }
+    });
   };
 
-  const handleEnviarCorreos = async () => {
+  const handleEnviarCorreos = () => {
     if (!empleados || empleados.length === 0) {
-      alert("No hay empleados para enviar desprendibles.");
+      toast.error("No hay empleados para enviar desprendibles.");
       return;
     }
-    if (!window.confirm("¿Deseas enviar los desprendibles de pago por correo a tu dirección registrada?")) {
-      return;
-    }
-
-    setIsSendingEmails(true);
-    try {
-      const payload = {
-        periodo: String(periodo).toUpperCase().trim(),
-        quincena: String(quincena).trim(),
-        contratos: empleados.map(e => e.id_contrato),
-      };
-
-      const response = await apiClient(
-        `${import.meta.env.VITE_API_URL}/api/v1/nomina/enviar-desprendibles`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      if (!response.ok) {
-        let errData = {};
+    
+    setConfirmModal({
+      isOpen: true,
+      title: "Enviar Desprendibles",
+      message: "¿Deseas enviar los desprendibles de pago por correo a tu dirección registrada?",
+      confirmText: "Enviar",
+      isDestructive: false,
+      onConfirm: async () => {
+        closeConfirmModal();
+        setIsSendingEmails(true);
         try {
-          errData = await response.json();
-        } catch (e) {}
-        const errorObj = new Error(errData.detail || "Error al enviar correos");
-        errorObj.response = { data: errData };
-        throw errorObj;
-      }
+          const payload = {
+            periodo: String(periodo).toUpperCase().trim(),
+            quincena: String(quincena).trim(),
+            contratos: empleados.map(e => e.id_contrato),
+          };
 
-      alert("¡Desprendibles enviados exitosamente!");
-    } catch (error) {
-      console.error("Error al enviar correos:", error);
-      const detail =
-        error.response?.data?.detail ||
-        error.message ||
-        "Error desconocido al enviar correos";
-      const errorMessage =
-        typeof detail === "string" ? detail : JSON.stringify(detail);
-      alert(errorMessage);
-    } finally {
-      setIsSendingEmails(false);
-    }
+          const response = await apiClient(
+            `${import.meta.env.VITE_API_URL}/api/v1/nomina/enviar-desprendibles`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(payload),
+            }
+          );
+
+          if (!response.ok) {
+            let errData = {};
+            try {
+              errData = await response.json();
+            } catch (e) {}
+            const errorObj = new Error(errData.detail || "Error al enviar correos");
+            errorObj.response = { data: errData };
+            throw errorObj;
+          }
+
+          toast.success("¡Desprendibles enviados exitosamente!");
+        } catch (error) {
+          console.error("Error al enviar correos:", error);
+          const detail =
+            error.response?.data?.detail ||
+            error.message ||
+            "Error desconocido al enviar correos";
+          const errorMessage =
+            typeof detail === "string" ? detail : JSON.stringify(detail);
+          toast.error(errorMessage);
+        } finally {
+          setIsSendingEmails(false);
+        }
+      }
+    });
+  };
+
+  const handleCerrarNomina = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Cerrar Nómina",
+      message: "¿Estás seguro? Una vez cerrada la nómina, no podrás realizar más modificaciones para este periodo.",
+      confirmText: "Aprobar y Cerrar",
+      isDestructive: true,
+      onConfirm: async () => {
+        closeConfirmModal();
+        setIsClosing(true);
+        try {
+          for (const emp of empleados) {
+            const payload = {
+              periodo: String(periodo).toUpperCase().trim(),
+              quincena: String(quincena).trim(),
+              id_contrato: emp.id_contrato,
+            };
+
+            const response = await apiClient(
+              `${import.meta.env.VITE_API_URL}/api/v1/nomina/cerrar`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              },
+            );
+
+            if (!response.ok) {
+              let errData = {};
+              try { errData = await response.json(); } catch(e) {}
+              const errorObj = new Error(errData.detail || "Error al cerrar la nómina");
+              errorObj.response = { data: errData };
+              throw errorObj;
+            }
+          }
+
+          setIsCerrado(true);
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  totales: {
+                    ...prev.totales,
+                    todos_cerrados: true,
+                    total_cerrados: prev.empleados.length,
+                  },
+                  empleados: prev.empleados.map((e) => ({
+                    ...e,
+                    esta_cerrado: true,
+                  })),
+                }
+              : prev
+          );
+          toast.success("Nóminas cerradas exitosamente.");
+        } catch (error) {
+          const detail = error.response?.data?.detail || error.message || "Error desconocido al cerrar la nómina";
+          const errorMessage = typeof detail === "string" ? detail : JSON.stringify(detail);
+          toast.error(errorMessage);
+        } finally {
+          setIsClosing(false);
+        }
+      }
+    });
   };
 
   return (
@@ -446,66 +535,7 @@ export default function ResumenNomina({
         <div className="flex justify-center pt-6 pb-12">
           <button
             type="button"
-            onClick={async () => {
-              if (
-                window.confirm(
-                  "¿Estás seguro? Una vez cerrada la nómina, no podrás realizar más modificaciones para este periodo.",
-                )
-              ) {
-                setIsClosing(true);
-                try {
-                  for (const emp of empleados) {
-                    const payload = {
-                      periodo: String(periodo).toUpperCase().trim(),
-                      quincena: String(quincena).trim(),
-                      id_contrato: emp.id_contrato,
-                    };
-
-                    const response = await apiClient(
-                      `${import.meta.env.VITE_API_URL}/api/v1/nomina/cerrar`,
-                      {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload),
-                      },
-                    );
-
-                    if (!response.ok) {
-                      let errData = {};
-                      try { errData = await response.json(); } catch(e) {}
-                      const errorObj = new Error(errData.detail || "Error al cerrar la nómina");
-                      errorObj.response = { data: errData };
-                      throw errorObj;
-                    }
-                  }
-
-                  setIsCerrado(true);
-                  setData((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          totales: {
-                            ...prev.totales,
-                            todos_cerrados: true,
-                            total_cerrados: prev.empleados.length,
-                          },
-                          empleados: prev.empleados.map((e) => ({
-                            ...e,
-                            esta_cerrado: true,
-                          })),
-                        }
-                      : prev
-                  );
-                  alert("Nóminas cerradas exitosamente.");
-                } catch (error) {
-                  const detail = error.response?.data?.detail || error.message || "Error desconocido al cerrar la nómina";
-                  const errorMessage = typeof detail === "string" ? detail : JSON.stringify(detail);
-                  alert(errorMessage);
-                } finally {
-                  setIsClosing(false);
-                }
-              }
-            }}
+            onClick={handleCerrarNomina}
             disabled={isClosing}
             className={`inline-flex items-center justify-center gap-3 font-bold py-4 px-12 text-lg text-white transition-colors duration-200 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#babf15] ${isClosing ? "bg-slate-400 cursor-not-allowed" : "bg-[#babf15] hover:bg-[#a2a812]"}`}
           >
@@ -551,6 +581,15 @@ export default function ResumenNomina({
           {isSendingEmails ? "Enviando Correos..." : "✉️ Enviar Desprendibles por Correo"}
         </button>
       </div>
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={closeConfirmModal}
+        confirmText={confirmModal.confirmText}
+        isDestructive={confirmModal.isDestructive}
+      />
     </div>
   );
 }

@@ -244,9 +244,10 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                 eps = str(extract_val(emp_wv, "EPS", "") or "").strip().upper()
                 fondo_pensiones = str(extract_val(emp_wv, "FONDO DE PENSIONES", "") or "").strip().upper()
 
-                raw_no_incluye = extract_val(emp_wv, "No Incluye Auxilio de Tte", "")
-                val_no_incluye = str(raw_no_incluye or "").strip().upper() if raw_no_incluye is not None else ""
-                if val_no_incluye in ["", "NO", "FALSE", "0", "NULL", "NONE"]:
+                raw_no_incluye = extract_val(emp_wv, "No Incluye Auxilio de Tte", True)
+                val_no_incluye = str(raw_no_incluye).strip().upper()
+                # Si el JSON dice FALSE/NO, invertimos y el resultado es SI (True)
+                if val_no_incluye in ["FALSE", "0", "NO"]:
                     tiene_aux = "SI"
                 else:
                     tiene_aux = "NO"
@@ -267,6 +268,7 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                         salario_base = COALESCE(EXCLUDED.salario_base, m_empleados.salario_base),
                         eps = COALESCE(EXCLUDED.eps, m_empleados.eps),
                         afp = COALESCE(EXCLUDED.afp, m_empleados.afp),
+                        tiene_aux = COALESCE(EXCLUDED.tiene_aux, m_empleados.tiene_aux),
                         link_drive = COALESCE(EXCLUDED.link_drive, m_empleados.link_drive),
                         nombre_1 = COALESCE(EXCLUDED.nombre_1, m_empleados.nombre_1),
                         nombre_2 = COALESCE(EXCLUDED.nombre_2, m_empleados.nombre_2),

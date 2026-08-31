@@ -586,6 +586,58 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
     if not empleado_target:
         raise HTTPException(status_code=404, detail="El empleado no fue encontrado en el CRM tras la sincronización.")
 
+    try:
+        ultima_nov = db.query(models.Novedad).filter(
+            models.Novedad.id_contrato == id_empleado
+        ).order_by(models.Novedad.created_at.desc()).first()
+
+        if ultima_nov:
+            ultima_nov.salario_base = forzar_numero(empleado_target.get("SALARIO_BASE", 0))
+            ultima_nov.vlr_bono = forzar_numero(empleado_target.get("VLR_BONO", 0))
+            ultima_nov.sal_especie = forzar_numero(empleado_target.get("SALARIO_ESPECIE", 0))
+            
+            # Mapeo explícito del auxilio de transporte hacia la transacción
+            ultima_nov.tiene_aux = (empleado_target.get("TIENE_AUX") == "SI")
+
+            row_dict_calc = {
+                "ES_SMLV": empleado_target.get("ES_SMLV") == "SI",
+                "CON_BONO": empleado_target.get("CON_BONO") == "SI",
+                "TIENE_AUX": ultima_nov.tiene_aux,
+                "TIPO_CONTRATO": empleado_target.get("TIPO_CONTRATO"),
+                "ESTADO_EMPLEADO": empleado_target.get("ESTADO_EMPLEADO"),
+                "PERIODO_PAGO": empleado_target.get("PERIODO_PAGO"),
+                "SALARIO_BASE": ultima_nov.salario_base,
+                "VLR_BONO": ultima_nov.vlr_bono,
+                "SALARIO_ESPECIE": ultima_nov.sal_especie,
+                "EPS": empleado_target.get("EPS"),
+                "FONDO_PENSIONES": empleado_target.get("FONDO DE PENSIONES"),
+                "DIAS_LABORADOS": ultima_nov.dias_laborados or 0,
+                "HORAS_LABORADAS": ultima_nov.horas_laboradas or 0,
+                "DIAS_VACACIONES": ultima_nov.dias_vacaciones or 0,
+                "DIAS_INCAPACIDAD": ultima_nov.dias_incapacidad or 0,
+                "PRESTAMOS": ultima_nov.prestamos or 0,
+                "PRIMA_CALC": ultima_nov.prima_calc or 0,
+                "HED": ultima_nov.hed or 0, "HEN": ultima_nov.hen or 0, "HEDF": ultima_nov.hedf or 0, "HENF": ultima_nov.henf or 0,
+                "RN": ultima_nov.rn or 0, "RDN": ultima_nov.rdn or 0, "RNF": ultima_nov.rnf or 0
+            }
+            
+            res_liq = liquidar_nomina([row_dict_calc], current_user)
+            if res_liq:
+                res_final = res_liq[0]
+                ultima_nov.ibc_pila = res_final.get("IBC_PILA", 0)
+                ultima_nov.salud_4 = res_final.get("SALUD_4", 0)
+                ultima_nov.pension_4 = res_final.get("PENSION_4", 0)
+                ultima_nov.total_devengado = res_final.get("TOTAL_DEVENGADO", 0)
+                ultima_nov.total_deducido = res_final.get("TOTAL_DEDUCIDO", 0)
+                ultima_nov.neto_pagar = res_final.get("NETO_PAGAR", 0)
+
+            db.commit()
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al actualizar la nómina actual del empleado {id_empleado}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error recalculando la nómina actual: {str(e)}")
+
     return {
         "status": "success",
         "data": empleado_target
@@ -1027,10 +1079,8 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
             df_final[vlr_col] = 0
 
     # 5. Auxilio de Transporte
-    bono_mensual_tope = np.where(
-        tipo_contrato == "TIEMPO PARCIAL", df_final['BONO_REF'] * 30, df_final['BONO_REF'])
-    cond_aux = tiene_aux & (
-        (df_final['SAL_REF'] + bono_mensual_tope) <= LIMITE_AUX)
+    # Corrección legal: El bono no salarial no suma para validar el tope de 2 SMLV.
+    cond_aux = tiene_aux & (df_final['SAL_REF'] <= LIMITE_AUX)
     df_final['VAL_AUX_TTE'] = np.where(
         cond_aux, (AUX_TTE_MES / 30) * dias_efectivos_trabajo, 0)
 
@@ -1501,10 +1551,6 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
     """
     Envía los desprendibles en memoria vía Resend.
     """
-    email_dest = str(current_user.get("email", "")).strip()
-    if not email_dest or email_dest.lower() == "desconocido":
-        raise HTTPException(status_code=400, detail="El usuario actual no tiene un correo válido.")
-
     if not resend.api_key:
         raise HTTPException(status_code=500, detail="La API Key de Resend no está configurada.")
 
@@ -1521,7 +1567,8 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
                        a.razon_social as razon_social,
                        a.tipo_documento as tipo_documento,
                        a.tipo_empleador as tipo_empleador,
-                       a.id_aportante as id_aportante
+                       a.id_aportante as id_aportante,
+                       a.email as email_aportante
                 FROM m_empleados e
                 JOIN t_novedades n ON e.id_contrato = n.id_contrato
                 LEFT JOIN m_aportantes a ON e.id_aportante = a.id_aportante
@@ -1606,18 +1653,31 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
             pdf_bytes = response_pdf.body
             
             headers = response_pdf.headers
-            content_disposition = headers.get("content-disposition", "")
-            nombre_archivo = "Desprendible.pdf"
-            if "filename=" in content_disposition:
-                nombre_archivo = content_disposition.split("filename=")[-1].strip().strip('"')
+            nombre_archivo = f"Desprendible_{id_contrato}_{payload.periodo}_{payload.quincena}.pdf"
             
             nombre_empleado = row_dict.get('NOMBRE_EMPLEADO', 'Empleado')
             periodo_texto = payload.periodo
+            quincena_texto = payload.quincena
+            periodo_pago = str(row_dict.get('PERIODO_PAGO', 'QUINCENAL')).strip().upper()
+            
+            if periodo_pago == "QUINCENAL":
+                sufijo_pago = f"Quincena {quincena_texto}"
+            else:
+                sufijo_pago = "Mensualidad"
+            
+            subject_final = f"Desprendible de Nómina - {nombre_empleado} - {periodo_texto} - {sufijo_pago}"
+            
+            email_aportante = str(row_dict_raw.get('EMAIL_APORTANTE', '')).strip()
+            if not email_aportante or email_aportante.lower() in ["none", ""]:
+                raise HTTPException(status_code=400, detail=f"El aportante del contrato {id_contrato} no tiene un correo válido registrado.")
+            
+            email_auditoria = os.environ.get("EMAIL_AUDITORIA", "auditoria@unifika.co")
             
             resend.Emails.send({
                 "from": mail_from,
-                "to": email_dest,
-                "subject": f"Desprendible de Nómina - {nombre_empleado} - {periodo_texto}",
+                "to": email_aportante,
+                "bcc": email_auditoria,
+                "subject": subject_final,
                 "html": f"<p>Adjunto encontrarás el desprendible de pago de {nombre_empleado} para el periodo {periodo_texto}.</p>",
                 "attachments": [
                     {
@@ -1627,7 +1687,7 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
                 ]
             })
             
-        return {"status": "success", "message": "Desprendibles enviados correctamente"}
+        return {"status": "success", "message": "Desprendibles enviados correctamente", "target_email": email_aportante if payload.contratos else None}
         
     except Exception as e:
         db.rollback()
@@ -1684,13 +1744,13 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             dias_laborados, horas_laboradas, dias_vacaciones, dias_incapacidad,
             prestamos, prima_calc, hed, hen, hedf, henf, rn, rdn, rnf, observaciones,
             ibc_pila, salud_4, pension_4, total_devengado, total_deducido, neto_pagar,
-            vlr_bono, sal_especie
+            vlr_bono, sal_especie, tiene_aux
         ) VALUES (
             :id_contrato, :periodo_liq, :quincena_pago, :generar_nomina, :salario_base,
             :dias_laborados, :horas_laboradas, :dias_vacaciones, :dias_incapacidad,
             :prestamos, :prima_calc, :hed, :hen, :hedf, :henf, :rn, :rdn, :rnf, :observaciones,
             :ibc_pila, :salud_4, :pension_4, :total_devengado, :total_deducido, :neto_pagar,
-            :vlr_bono, :sal_especie
+            :vlr_bono, :sal_especie, :tiene_aux
         )
         ON CONFLICT (id_contrato, periodo_liq, quincena_pago)
         DO UPDATE SET
@@ -1718,6 +1778,7 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             neto_pagar = EXCLUDED.neto_pagar,
             vlr_bono = EXCLUDED.vlr_bono,
             sal_especie = EXCLUDED.sal_especie,
+            tiene_aux = EXCLUDED.tiene_aux,
             created_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota';
     """)
 
@@ -1752,7 +1813,8 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "total_deducido": forzar_numero(row.get('TOTAL_DEDUCIDO', 0)),
                 "neto_pagar": forzar_numero(row.get('NETO_PAGAR', 0)),
                 "vlr_bono": forzar_numero(row.get('VLR_BONO', 0)),
-                "sal_especie": forzar_numero(row.get('SALARIO_ESPECIE', 0))
+                "sal_especie": forzar_numero(row.get('SALARIO_ESPECIE', 0)),
+                "tiene_aux": str(row.get('TIENE_AUX', 'NO')).strip().upper() in ['SI', 'SÍ', 'TRUE', '1', 'VERDADERO']
             }
 
             db.execute(upsert_query, params)
@@ -2014,6 +2076,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     salario_base=emp.salario_base,
                                     vlr_bono=emp.vlr_bono,
                                     sal_especie=sal_especie_aplicar,
+                                    tiene_aux=emp.tiene_aux,
                                     observaciones="Pre-liquidación automática"
                                 )
                             else:
@@ -2031,6 +2094,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     salario_base=emp.salario_base,
                                     vlr_bono=emp.vlr_bono,
                                     sal_especie=sal_especie_aplicar,
+                                    tiene_aux=emp.tiene_aux,
                                     observaciones="Pre-liquidación automática inicial"
                                 )
                             
@@ -2038,7 +2102,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                             row_dict_calc = {
                                 "ES_SMLV": emp.es_smlv,
                                 "CON_BONO": emp.con_bono,
-                                "TIENE_AUX": emp.tiene_aux,
+                                "TIENE_AUX": nueva_nov.tiene_aux,
                                 "TIPO_CONTRATO": emp.tipo_contrato,
                                 "ESTADO_EMPLEADO": emp.estado_empleado,
                                 "PERIODO_PAGO": emp.periodo_pago,
@@ -2129,7 +2193,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     response_pdf = generar_comprobante(row_dict)
                                     pdf_bytes = response_pdf.body
                                     attachments.append({
-                                        "filename": f"Pre_liquidacion_{emp.id_contrato}.pdf",
+                                        "filename": f"Desprendible_{emp.id_contrato}_{periodo_liq}_{quincena_pago}.pdf",
                                         "content": list(pdf_bytes)
                                     })
                                 
@@ -2143,10 +2207,20 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     </div>
                                 </div>
                                 """
+                                nombre_empleado_cron = emp.nombre if emp.nombre else "Empleado"
+                                periodo_pago_cron = str(emp.periodo_pago).strip().upper() if emp.periodo_pago else 'QUINCENAL'
+                                
+                                if periodo_pago_cron == "QUINCENAL":
+                                    sufijo_pago_cron = f"Quincena {quincena_pago}"
+                                else:
+                                    sufijo_pago_cron = "Mensualidad"
+                                
+                                subject_final_cron = f"Desprendible de Nómina - {nombre_empleado_cron} - {periodo_liq} - {sufijo_pago_cron}"
+
                                 resend.Emails.send({
                                     "from": mail_from,
                                     "to": email_aportante,
-                                    "subject": f"Pre-liquidación de Nómina Lista - {periodo_liq}",
+                                    "subject": subject_final_cron,
                                     "html": html_content,
                                     "attachments": attachments
                                 })

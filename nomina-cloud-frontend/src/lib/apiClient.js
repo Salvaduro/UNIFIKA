@@ -1,4 +1,5 @@
 import { supabase } from "./supabaseClient";
+import { toast } from "react-hot-toast";
 
 /**
  * Cliente API para hacer peticiones al backend (FastAPI).
@@ -34,9 +35,11 @@ export const apiClient = async (url, options = {}) => {
 
   // 5. Interceptar errores 401 Globalmente (Sesión Expirada o Inválida)
   if (response.status === 401) {
-    alert("Tu sesión ha expirado por seguridad. Por favor, vuelve a ingresar.");
+    toast.error("Tu sesión ha expirado por seguridad. Por favor, vuelve a ingresar.");
     await supabase.auth.signOut();
-    window.location.href = "/";
+    setTimeout(() => {
+      window.location.href = "/";
+    }, 2000);
     return response;
   }
 

@@ -140,6 +140,7 @@ class Novedad(Base):
     salario_base = Column(Numeric(12, 2), nullable=True)
     vlr_bono = Column(Numeric(12, 2), nullable=True)
     sal_especie = Column(Numeric(12, 2), nullable=True)
+    tiene_aux = Column(Boolean, default=False)
 
     # Relación con m_empleados
     empleado = relationship("Empleado", back_populates="novedades")

@@ -1,21 +1,26 @@
-# DOSSIER FASE 6: Operación Continua y Quick Wins
+# Mapa de Contexto Arquitectónico - UNIFIKA Nómina Cloud
 
-## ESTADO: FASE CERRADA Y EN PRODUCCIÓN 🏆
+## 1. Topología de Infraestructura (Stateless)
+*   **Frontend:** React + Vite (Desplegado en Vercel).
+*   **Backend:** Python + FastAPI (Desplegado en Render). Usa discos efímeros (PROHIBIDO guardar archivos físicos).
+*   **Base de Datos:** PostgreSQL (Alojado en Supabase).
+*   **Proxy de Salida (IP Fija):** Fixie (Enruta peticiones de Render hacia el firewall de Wolkvox CRM).
+*   **Comunicaciones (Email):** Resend (Envío de correos transaccionales con adjuntos PDF generados en memoria RAM. Puerto SMTP: 2525/465/587).
+*   **Automatización:** cron-job.org lanza un POST diario a las 6:00 AM al endpoint `/api/v1/cron/procesar-ciclo`. **El backend orquesta esto vía BackgroundTasks para evitar Timeouts.**
 
-### Hitos Logrados:
-- [x] **Auditoría Global:** Tabla `t_auditoria_logs` implementada. Dashboard de lectura exclusivo para SUPERADMIN con filtros nativos y ordenamiento.
-- [x] **Notificaciones por Correo:** Integración de Resend. PDFs generados en memoria y enviados a los clientes. Redirección inteligente de botones web hacia la app para proteger sesiones.
-- [x] **Automatización Inteligente (Cron Job):**
-    - Motor automatizado protegido con `X-Cron-Secret`.
-    - *Clonación Limpia:* Pre-liquida 2 días hábiles antes del corte. Extrae salario actual de la fuente de verdad (m_empleados) y encera novedades eventuales, disparando email con PDF adjunto. Excluye estados inválidos de Wolkvox.
-    - *Cierre Automático:* Coloca candado inmutable a las nóminas 3 días hábiles después del corte.
-- [x] **Entorno de Pruebas Seguras:** Parámetros `dry_run` y `target_aportante` implementados en el Cron para aislar pruebas en producción.
-- [x] **Migración Histórica (Data Seeding):** Script de mapeo seguro (`migracion_colab.py`) desarrollado y ejecutado. Filtro avanzado de duplicados, "huérfanos" y casteo de tipos aplicado. Script preservado en carpeta `scripts/`.
-- [x] **Infraestructura:** Proxy Fixie escalado.
+## 2. Entidades Core y Flujo de Datos
+*   **`m_empleados` (Fuente de la Verdad):** Contiene la data maestra. Al generar o clonar nóminas, los datos fijos SIEMPRE se extraen de aquí. Excluye estados: 'RETIRADO', 'En Mora SS', 'UnicaAfiliacion'.
+*   **`t_novedades` (Transaccional):** Almacena las variables del periodo. La regeneración histórica de PDFs usa un **Patrón Híbrido**: calcula el desglose al vuelo, pero sobreescribe deducciones y totales con la BD para garantizar inmutabilidad.
+*   **`t_cierres_nomina` (Candado):** Registro de inmutabilidad. Se activa automáticamente 3 días hábiles después del corte.
+*   **`t_auditoria_logs` (Telemetría):** Caja negra del sistema. Registra acciones del STAFF, EMPLEADOR y SISTEMA_CRON.
 
----
+## 3. Seguridad y RBAC
+*   **Roles:** SUPERADMIN, ADMINISTRADOR (STAFF) y EMPLEADOR (Cliente).
+*   **Override:** Solo el STAFF puede reabrir nóminas cerradas.
+*   **Cron Security:** Protegido por el header `X-Cron-Secret`.
+*   **Ejecución Dirigida:** El Cron soporta el parámetro `?target_aportante=ID` para aislar pruebas en producción.
 
-### Siguientes Pasos (FASE 7): Módulo Avanzado de Prestaciones y Seguridad Social
-- **Ausentismos:** Lógica avanzada de Vacaciones, Incapacidades y Licencias (control por rangos de fechas).
-- **Liquidaciones:** Estrategia y parámetros para cálculo automático de Primas, Cesantías y Liquidación de Contratos usando históricos de IBC.
-- **Parafiscales:** Estrategia de cálculo de SENA, ICBF y CCF base PILA, preparando el terreno para integración con operadores.
+## 4. Próxima Arquitectura (Fase 7 - Prestaciones y PILA)
+*   *En diseño:* Transición a tablas de control de fechas (inicio/fin) para ausentismos (licencias e incapacidades).
+*   *En diseño:* Acumuladores de IBC y días laborados para liquidación automática de primas, cesantías e intereses.
+*   *En diseño:* Motor de cálculo de Parafiscales (SENA, ICBF, CCF) utilizando el IBC_PILA actual.
