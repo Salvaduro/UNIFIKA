@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import "./App.css";
 import logoUrl from "./assets/Logo.png";
 import Auth from "./components/Auth";
@@ -124,6 +124,12 @@ function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [reporteData, setReporteData] = useState([]);
+  const [reporteFiltro, setReporteFiltro] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(15);
+  const [sortConfig, setSortConfig] = useState({ key: "razon_social", direction: "ascending" });
+  const [isFetchingReporte, setIsFetchingReporte] = useState(false);
   const [isCerrado, setIsCerrado] = useState(false);
   const [carpetaCliente, setCarpetaCliente] = useState(null);
 
@@ -159,6 +165,8 @@ function App() {
   // Estados del Periodo
   const [periodoLiq, setPeriodoLiq] = useState(periodoInicial.periodo);
   const [quincenaPago, setQuincenaPago] = useState(periodoInicial.quincena);
+  const [reportePeriodo, setReportePeriodo] = useState(periodoInicial.periodo);
+  const [reporteQuincena, setReporteQuincena] = useState("1");
   const [observaciones, setObservaciones] = useState("");
   const [mostrarNota, setMostrarNota] = useState(false);
 
@@ -175,6 +183,54 @@ function App() {
   const [isContractOpen, setIsContractOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("liquidacion");
   const [refreshResumenKey, setRefreshResumenKey] = useState(0);
+
+  // Derivaciones del DataGrid (Movidas aquí para evitar violar Rules of Hooks por Early Returns)
+  const sortedData = useMemo(() => {
+    let sortableItems = [...(reporteData || [])];
+    if (sortConfig !== null) {
+      sortableItems.sort((a, b) => {
+        let valA = a?.[sortConfig.key];
+        let valB = b?.[sortConfig.key];
+
+        if (valA === null || valA === undefined) valA = typeof valB === "number" ? 0 : "";
+        if (valB === null || valB === undefined) valB = typeof valA === "number" ? 0 : "";
+
+        if (typeof valA === "number" && typeof valB === "number") {
+          return sortConfig.direction === "ascending" ? valA - valB : valB - valA;
+        }
+        const strA = String(valA || "").toLowerCase();
+        const strB = String(valB || "").toLowerCase();
+        if (strA < strB) {
+          return sortConfig.direction === "ascending" ? -1 : 1;
+        }
+        if (strA > strB) {
+          return sortConfig.direction === "ascending" ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return sortableItems;
+  }, [reporteData, sortConfig]);
+
+  const datosFiltrados = (sortedData || []).filter((item) => {
+    if (!reporteFiltro) return true;
+    const term = reporteFiltro.toLowerCase();
+    return (
+      item?.razon_social?.toLowerCase().includes(term) ||
+      item?.nombre_empleado?.toLowerCase().includes(term) ||
+      String(item?.id_contrato || "").toLowerCase().includes(term) ||
+      item?.tipo_contrato?.toLowerCase().includes(term)
+    );
+  });
+
+  const totalPages = Math.max(1, Math.ceil((datosFiltrados?.length || 0) / itemsPerPage));
+  const paginatedData = (datosFiltrados || []).slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  const totalDevengadoFiltrado = (datosFiltrados || []).reduce((sum, item) => sum + (Number(item?.total_devengado) || 0), 0);
+  const totalIbcFiltrado = (datosFiltrados || []).reduce((sum, item) => sum + (Number(item?.ibc_pila) || 0), 0);
 
   // Efecto para cargar el perfil al iniciar sesión
   useEffect(() => {
@@ -560,6 +616,37 @@ function App() {
     }
   };
 
+  const handleEditarDesdeReporte = async (item) => {
+    const nit = item.nit_empresa;
+    const contratoId = item.id_contrato;
+    
+    setEmpleadorId(nit);
+    setPeriodoLiq(item.periodo_liq);
+    setQuincenaPago(item.quincena_pago);
+    setSelectedEmpleadoId(contratoId);
+    
+    setActiveTab("liquidacion");
+
+    try {
+      const targetId = nit || "me";
+      const response = await apiClient(
+        `${import.meta.env.VITE_API_URL}/api/v1/empleador/${targetId}/empleado/${encodeURIComponent(contratoId)}`
+      );
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data.status === "success" && data.data) {
+        autocompletarFormulario(data.data);
+      } else {
+        throw new Error("Respuesta del servidor sin status success o sin data");
+      }
+    } catch (error) {
+      console.error("Error al cargar detalle del empleado desde reporte:", error);
+      toast.error(`Error al cargar datos del empleado: ${error.message || "Error desconocido"}`);
+    }
+  };
+
   const handleSyncEmpleado = async (e, idContrato) => {
     e.preventDefault();
     e.stopPropagation();
@@ -727,6 +814,77 @@ function App() {
   // ==========================================
   // BLOQUE 4: LIQUIDACIÓN DE NÓMINA (SUBMIT)
   // ==========================================
+  // ==========================================
+  // BLOQUE 4: REPORTE DE FACTURACION (STAFF)
+  // ==========================================
+  const handleConsultarReporte = async () => {
+    setIsFetchingReporte(true);
+    try {
+      const response = await apiClient(
+        `${import.meta.env.VITE_API_URL}/api/v1/reportes/facturacion?periodo=${encodeURIComponent(reportePeriodo)}&quincena=${encodeURIComponent(reporteQuincena)}`,
+        { method: "GET" }
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data.status === "success") {
+        setReporteData(data.data || []);
+      } else {
+        setReporteData([]);
+      }
+    } catch (error) {
+      console.error("Error al consultar reporte:", error);
+      toast.error("Error al cargar datos del reporte");
+      setReporteData([]);
+    } finally {
+      setIsFetchingReporte(false);
+    }
+  };
+
+  const handleFiltroChange = (e) => {
+    setReporteFiltro(e.target.value);
+    setCurrentPage(1);
+  };
+
+  const handleItemsPerPageChange = (e) => {
+    setItemsPerPage(Number(e.target.value));
+    setCurrentPage(1);
+  };
+
+  const handleSort = (key) => {
+    let direction = "ascending";
+    if (sortConfig.key === key && sortConfig.direction === "ascending") {
+      direction = "descending";
+    }
+    setSortConfig({ key, direction });
+  };
+
+
+
+  const handleExportarCSVLocal = () => {
+    if (!datosFiltrados || datosFiltrados.length === 0) return;
+    
+    const cabeceras = ["ID Contrato", "Empresa", "Empleado", "Tipo Contrato", "Periodo", "Quincena", "Días Lab", "Días Incap", "Días Vac", "IBC", "Devengado", "Deducido", "Neto", "Estado"];
+    
+    const lineas = datosFiltrados.map(d => {
+      return `"${d.id_contrato}","${d.razon_social}","${d.nombre_empleado}","${d.tipo_contrato}","${d.periodo_liq}","${d.quincena_pago}","${d.dias_laborados}","${d.dias_incapacidad}","${d.dias_vacaciones}","${d.ibc_pila}","${d.total_devengado}","${d.total_deducido}","${d.neto_pagar}","${d.estado_cierre}"`;
+    });
+    
+    const csvContent = cabeceras.join(",") + "\n" + lineas.join("\n");
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Reporte_Granular_${reportePeriodo.replace(" ", "_")}_${new Date().getTime()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success("CSV exportado correctamente");
+  };
+
   const handleLiquidarNomina = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -1075,6 +1233,8 @@ function App() {
                   "Revisa el resumen de pagos y aprueba la nómina para generar los desprendibles."}
                 {activeTab === "historico" &&
                   "Consulta las nóminas pasadas y descarga los comprobantes de pago de tus empleados."}
+                {activeTab === "reportes" &&
+                  "Consolida y exporta la facturación de nóminas (Acceso exclusivo Staff)."}
                 {activeTab === "auditoria" &&
                   "Supervisa y analiza la trazabilidad completa y eventos del sistema (Acceso exclusivo SUPERADMIN)."}
               </p>
@@ -1100,12 +1260,20 @@ function App() {
               >
                 3. Historial de Nóminas
               </button>
+              {(perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
+                <button
+                  onClick={() => setActiveTab("reportes")}
+                  className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === "reportes" ? "bg-[#83a9b2] text-white shadow-md" : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"}`}
+                >
+                  4. Reportes (Staff)
+                </button>
+              )}
               {perfilAportante?.rol === "SUPERADMIN" && (
                 <button
                   onClick={() => setActiveTab("auditoria")}
                   className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === "auditoria" ? "bg-[#83a9b2] text-white shadow-md" : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"}`}
                 >
-                  4. Auditoría (Staff)
+                  5. Auditoría (Staff)
                 </button>
               )}
             </div>
@@ -2276,6 +2444,232 @@ function App() {
 
           {activeTab === "historico" && (
             <DashboardHistorico idAportante={empleadorId} />
+          )}
+
+          {activeTab === "reportes" && (perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 w-full mt-8 overflow-hidden">
+              <div className="px-6 py-5 bg-[#5b97a9] text-white flex justify-between items-center">
+                <h2 className="text-xl font-bold">Reporte de Nóminas Generadas</h2>
+              </div>
+              
+              <div className="p-6">
+                {/* Tarjetas de Resumen */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-1">Registros Visibles</p>
+                      <p className="text-2xl font-black text-slate-800">{datosFiltrados.length}</p>
+                    </div>
+                    <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-1">Sumatoria Devengos</p>
+                      <p className="text-2xl font-black text-emerald-600">${totalDevengadoFiltrado.toLocaleString()}</p>
+                    </div>
+                    <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-1">Sumatoria IBC</p>
+                      <p className="text-2xl font-black text-indigo-600">${totalIbcFiltrado.toLocaleString()}</p>
+                    </div>
+                    <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 border-b border-slate-100 pb-6">
+                  <div className="flex flex-col md:flex-row gap-3 items-center w-full md:w-auto">
+                    <label className="text-sm font-semibold text-slate-700">Periodo:</label>
+                    <select
+                      value={reportePeriodo}
+                      onChange={(e) => setReportePeriodo(e.target.value)}
+                      className="px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-unifika-primary outline-none"
+                    >
+                      {generarPeriodos().map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={reporteQuincena}
+                      onChange={(e) => setReporteQuincena(e.target.value)}
+                      className="px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-unifika-primary outline-none"
+                    >
+                      <option value="1">Quincena 1</option>
+                      <option value="2">Quincena 2</option>
+                      <option value="M">Mensualidad (M)</option>
+                    </select>
+                    <button
+                      onClick={handleConsultarReporte}
+                      disabled={isFetchingReporte}
+                      className="px-6 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors disabled:opacity-50"
+                    >
+                      {isFetchingReporte ? "Consultando..." : "Consultar"}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col md:flex-row gap-3 items-center w-full md:w-auto">
+                    <input
+                      type="text"
+                      placeholder="Buscar por Empleado, Empresa, ID o Tipo Contrato..."
+                      value={reporteFiltro}
+                      onChange={handleFiltroChange}
+                      className="px-4 py-2 border border-slate-300 rounded-xl w-full md:w-64 focus:ring-2 focus:ring-unifika-primary outline-none"
+                    />
+                    <button
+                      onClick={handleExportarCSVLocal}
+                      disabled={datosFiltrados.length === 0}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                      Exportar CSV
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto max-h-[600px] border border-slate-200 rounded-xl">
+                  <table className="w-full text-sm text-left text-slate-600 border-collapse">
+                    <thead className="text-xs text-slate-700 uppercase bg-slate-100 border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                      <tr>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("razon_social")}>
+                          <div className="flex items-center gap-1">Empresa {sortConfig.key === "razon_social" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("id_contrato")}>
+                          <div className="flex items-center gap-1">ID Contrato {sortConfig.key === "id_contrato" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("nombre_empleado")}>
+                          <div className="flex items-center gap-1">Empleado {sortConfig.key === "nombre_empleado" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("tipo_contrato")}>
+                          <div className="flex items-center gap-1">T. Contrato {sortConfig.key === "tipo_contrato" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 text-center cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("dias_laborados")}>
+                          <div className="flex items-center justify-center gap-1">Lab. {sortConfig.key === "dias_laborados" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 text-center cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("dias_incapacidad")}>
+                          <div className="flex items-center justify-center gap-1">Inc. {sortConfig.key === "dias_incapacidad" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 text-center cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("dias_vacaciones")}>
+                          <div className="flex items-center justify-center gap-1">Vac. {sortConfig.key === "dias_vacaciones" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("ibc_pila")}>
+                          <div className="flex items-center gap-1">IBC {sortConfig.key === "ibc_pila" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("total_devengado")}>
+                          <div className="flex items-center gap-1">Devengado {sortConfig.key === "total_devengado" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("total_deducido")}>
+                          <div className="flex items-center gap-1">Deducido {sortConfig.key === "total_deducido" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("neto_pagar")}>
+                          <div className="flex items-center gap-1">Neto {sortConfig.key === "neto_pagar" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 text-center cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => handleSort("estado_cierre")}>
+                          <div className="flex items-center justify-center gap-1">Estado {sortConfig.key === "estado_cierre" && (sortConfig.direction === "ascending" ? "▲" : "▼")}</div>
+                        </th>
+                        <th className="px-4 py-3 text-center text-slate-700">ACCIÓN</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {isFetchingReporte ? (
+                        <tr>
+                          <td colSpan="13" className="px-4 py-8 text-center text-slate-500">
+                            <div className="flex justify-center items-center gap-2">
+                              <svg className="animate-spin h-5 w-5 text-unifika-primary" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                              Cargando datos...
+                            </div>
+                          </td>
+                        </tr>
+                      ) : paginatedData.length === 0 ? (
+                        <tr>
+                          <td colSpan="13" className="px-4 py-8 text-center text-slate-500">
+                            {reporteData.length === 0 ? "No hay datos para el periodo seleccionado." : "No se encontraron coincidencias para tu búsqueda."}
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedData.map((item, idx) => (
+                          <tr key={idx} className="bg-white border-b border-slate-100 hover:bg-slate-50 transition-colors whitespace-nowrap">
+                            <td className="px-4 py-3 font-medium text-slate-800">{item.razon_social}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-500">{item.id_contrato}</td>
+                            <td className="px-4 py-3 max-w-[200px] truncate" title={item.nombre_empleado}>{item.nombre_empleado}</td>
+                            <td className="px-4 py-3 text-xs text-slate-500">{item.tipo_contrato}</td>
+                            <td className="px-4 py-3 text-center">{item.dias_laborados}</td>
+                            <td className="px-4 py-3 text-center">{item.dias_incapacidad}</td>
+                            <td className="px-4 py-3 text-center">{item.dias_vacaciones}</td>
+                            <td className="px-4 py-3 text-slate-600 font-medium">${item.ibc_pila?.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-emerald-600 font-medium">${item.total_devengado?.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-rose-600 font-medium">${item.total_deducido?.toLocaleString()}</td>
+                            <td className="px-4 py-3 font-bold">${item.neto_pagar?.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${item.estado_cierre === "CERRADA" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                                {item.estado_cierre}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <button
+                                onClick={() => handleEditarDesdeReporte(item)}
+                                className="text-emerald-600 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded p-1.5 transition-colors"
+                                title="Editar liquidación"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Controles de Paginación */}
+                {totalPages > 0 && (
+                  <div className="flex flex-col sm:flex-row justify-between items-center mt-4 gap-4">
+                    <div className="flex items-center gap-2 text-sm text-slate-600">
+                      <span>Mostrar</span>
+                      <select 
+                        value={itemsPerPage} 
+                        onChange={handleItemsPerPageChange}
+                        className="border border-slate-300 rounded px-2 py-1 outline-none focus:border-unifika-primary"
+                      >
+                        <option value={10}>10</option>
+                        <option value={15}>15</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                      <span>registros</span>
+                    </div>
+
+                    <div className="text-sm text-slate-600 font-medium">
+                      Página {currentPage} de {totalPages}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-3 py-1 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Anterior
+                      </button>
+                      <button 
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-3 py-1 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Siguiente
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           {activeTab === "auditoria" && perfilAportante?.rol === "SUPERADMIN" && (

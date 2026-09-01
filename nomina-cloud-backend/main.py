@@ -10,8 +10,10 @@ import logging
 import json
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi import FastAPI, Depends, Body, HTTPException, Request, BackgroundTasks
+import io
+import csv
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -2341,3 +2343,73 @@ def procesar_ciclo(request: Request, background_tasks: BackgroundTasks, dry_run:
 
     background_tasks.add_task(procesar_ciclo_background, dry_run, target_aportante, target_date_str)
     return {"status": "processing", "message": "Proceso iniciado en segundo plano."}
+
+
+@app.get("/api/v1/reportes/facturacion")
+def reporte_facturacion(periodo: str = None, quincena: str = None, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    rol = str(current_user.get("rol", "")).upper().strip()
+    if rol not in ["SUPERADMIN", "ADMINISTRADOR"]:
+        raise HTTPException(status_code=403, detail="Acceso denegado: solo personal Staff puede ver este reporte.")
+
+    filter_clause_parts = []
+    params = {}
+    if periodo:
+        filter_clause_parts.append("n.periodo_liq = :periodo")
+        params["periodo"] = periodo
+    if quincena:
+        filter_clause_parts.append("n.quincena_pago = :quincena")
+        params["quincena"] = quincena
+    
+    filter_clause = "WHERE " + " AND ".join(filter_clause_parts) if filter_clause_parts else ""
+
+    query = text(f"""
+        SELECT 
+            n.id_contrato,
+            a.id_aportante as nit_empresa,
+            a.razon_social,
+            e.nombre_empleado,
+            e.tipo_contrato,
+            n.periodo_liq,
+            n.quincena_pago,
+            n.dias_laborados,
+            n.dias_incapacidad,
+            n.dias_vacaciones,
+            n.ibc_pila,
+            n.total_devengado,
+            n.total_deducido,
+            n.neto_pagar,
+            c.id_contrato as cierre_id
+        FROM t_novedades n
+        JOIN m_empleados e ON n.id_contrato = e.id_contrato
+        JOIN m_aportantes a ON e.id_aportante = a.id_aportante
+        LEFT JOIN t_cierres_nomina c ON 
+            n.id_contrato = c.id_contrato AND 
+            n.periodo_liq = c.periodo_liq AND 
+            n.quincena_pago = c.quincena_pago
+        {filter_clause}
+        ORDER BY a.razon_social ASC, e.nombre_empleado ASC, n.periodo_liq DESC, n.quincena_pago DESC
+    """)
+    
+    rows = db.execute(query, params).mappings().all()
+
+    data = []
+    for r in rows:
+        data.append({
+            "id_contrato": r["id_contrato"],
+            "nit_empresa": r["nit_empresa"],
+            "razon_social": r["razon_social"],
+            "nombre_empleado": r["nombre_empleado"],
+            "tipo_contrato": r["tipo_contrato"],
+            "periodo_liq": r["periodo_liq"],
+            "quincena_pago": r["quincena_pago"],
+            "dias_laborados": float(r["dias_laborados"]) if r["dias_laborados"] else 0.0,
+            "dias_incapacidad": float(r["dias_incapacidad"]) if r["dias_incapacidad"] else 0.0,
+            "dias_vacaciones": float(r["dias_vacaciones"]) if r["dias_vacaciones"] else 0.0,
+            "ibc_pila": float(r["ibc_pila"]) if r["ibc_pila"] else 0.0,
+            "total_devengado": float(r["total_devengado"]) if r["total_devengado"] else 0.0,
+            "total_deducido": float(r["total_deducido"]) if r["total_deducido"] else 0.0,
+            "neto_pagar": float(r["neto_pagar"]) if r["neto_pagar"] else 0.0,
+            "estado_cierre": "CERRADA" if r["cierre_id"] else "PARCIAL"
+        })
+
+    return {"status": "success", "data": data}
