@@ -422,6 +422,18 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
     if not resultado_admin:
         raise HTTPException(status_code=404, detail=f"Aportante con ID {id_contacto} no encontrado en el sistema ni en el CRM.")
 
+    # Candado de Seguridad: Bloqueo por estado del Aportante
+    estado_contacto_raw = resultado_admin.get("estado_contacto") or ""
+    estado_normalizado = str(estado_contacto_raw).strip().upper()
+    
+    estados_restringidos = ["RETIRADO", "EN MORA SS", "UNICA AFILIACION", "UNICAAFILIACION"]
+    
+    if estado_normalizado in estados_restringidos:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"El cliente actualmente está en estado '{estado_contacto_raw}' y por tanto no puede acceder a este servicio."
+        )
+
     razon_social = resultado_admin.get("razon_social", id_contacto)
     email_aportante = resultado_admin.get("email", "")
 
