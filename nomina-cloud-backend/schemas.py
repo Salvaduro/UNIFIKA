@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Union
-from datetime import datetime
+from datetime import datetime, date
 from models import RolUsuario
 
 # =========================================================
@@ -97,5 +97,27 @@ class UsuarioPerfilResponse(BaseModel):
     message: str
     user: Optional[UserDataResponse] = None
     data: Optional[UserDataResponse] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =========================================================
+# ESQUEMAS PARA AUSENTISMOS (FASE 7)
+# =========================================================
+class AusentismoBase(BaseModel):
+    tipo_novedad: str
+    fecha_inicio: date
+    fecha_fin: date
+    observaciones: Optional[str] = None
+
+class AusentismoCreate(AusentismoBase):
+    pass
+
+class AusentismoResponse(AusentismoBase):
+    id_ausentismo: str
+    id_contrato: str
+    dias_totales: float
+    estado: str
+    created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

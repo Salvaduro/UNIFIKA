@@ -11,7 +11,7 @@ import json
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from fastapi.responses import Response, StreamingResponse
-from fastapi import FastAPI, Depends, Body, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, Body, HTTPException, Request, BackgroundTasks, Form, File, UploadFile
 import io
 import csv
 from fastapi.middleware.cors import CORSMiddleware
@@ -629,6 +629,7 @@ async def sincronizar_detalle_empleado(id_contacto: str, id_empleado: str, db: S
                 "HORAS_LABORADAS": ultima_nov.horas_laboradas or 0,
                 "DIAS_VACACIONES": ultima_nov.dias_vacaciones or 0,
                 "DIAS_INCAPACIDAD": ultima_nov.dias_incapacidad or 0,
+                "DIAS_LICENCIA": ultima_nov.dias_licencia or 0,
                 "PRESTAMOS": ultima_nov.prestamos or 0,
                 "PRIMA_CALC": ultima_nov.prima_calc or 0,
                 "HED": ultima_nov.hed or 0, "HEN": ultima_nov.hen or 0, "HEDF": ultima_nov.hedf or 0, "HENF": ultima_nov.henf or 0,
@@ -964,6 +965,7 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
         'PERIODO_PAGO': 'QUINCENAL',
         'DIAS_VACACIONES': 0,
         'DIAS_INCAPACIDAD': 0,
+        'DIAS_LICENCIA': 0,
         'SALARIO_BASE': 0,
         'SALARIO_ESPECIE': 0,
         'VLR_BONO': 0,
@@ -1004,7 +1006,7 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
         df_final[col] = df_final[col].apply(limpiar_valor)
 
     cols_num = cols_limpiar + ['DIAS_LABORADOS', 'HORAS_LABORADAS',
-                               'DIAS_VACACIONES', 'DIAS_INCAPACIDAD'] + list(FACTORES.keys())
+                               'DIAS_VACACIONES', 'DIAS_INCAPACIDAD', 'DIAS_LICENCIA'] + list(FACTORES.keys())
     cols_existentes = [col for col in cols_num if col in df_final.columns]
     df_final[cols_existentes] = df_final[cols_existentes].apply(
         pd.to_numeric, errors='coerce').fillna(0)
@@ -1026,10 +1028,13 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
     # Distribución de Días
     d_vac = df_final['DIAS_VACACIONES']
     d_inc = df_final['DIAS_INCAPACIDAD']
+    if 'DIAS_LICENCIA' not in df_final.columns:
+        df_final['DIAS_LICENCIA'] = 0
+    d_lic = df_final['DIAS_LICENCIA']
     d_lab_total = np.where(df_final['HORAS_LABORADAS'] > 0,
                            df_final['HORAS_LABORADAS'] / 8, df_final['DIAS_LABORADOS'])
 
-    dias_efectivos_trabajo = np.maximum(d_lab_total - d_vac - d_inc, 0)
+    dias_efectivos_trabajo = np.maximum(d_lab_total - d_vac - d_inc - d_lic, 0)
 
     sal_base_raw = df_final['SALARIO_BASE']
     sal_especie_raw = df_final['SALARIO_ESPECIE']
@@ -1414,7 +1419,8 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     # --- 1. CONCEPTOS DE TIEMPO Y SALARIO ---
     d_vac = forzar_numero(row.get('DIAS_VACACIONES', 0))
     d_inc = forzar_numero(row.get('DIAS_INCAPACIDAD', 0))
-    d_trab = np.maximum(total_dias - d_vac - d_inc, 0)
+    d_lic = forzar_numero(row.get('DIAS_LICENCIA', 0))
+    d_trab = np.maximum(total_dias - d_vac - d_inc - d_lic, 0)
 
     label_sueldo = "Sueldo Efectivo" if forzar_numero(
         row.get('SAL_ESPECIE_PAGADO', 0)) > 0 else "Sueldo por Días Trabajados"
@@ -1450,6 +1456,12 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
             pdf.cell(45, 7, f"{val:,.0f}", border='LR', align='R')
             pdf.cell(45, 7, "0", border='LR', align='R',
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    if d_lic > 0:
+        pdf.cell(100, 7, f"Licencia No Remunerada ({d_lic:.0f} días)", border='LR')
+        pdf.cell(45, 7, "0", border='LR', align='R')
+        pdf.cell(45, 7, "0", border='LR', align='R',
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # 2. DETALLE DE EXTRAS
     for cod, factor in factores_dict.items():
@@ -1755,13 +1767,13 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
     upsert_query = text("""
         INSERT INTO t_novedades (
             id_contrato, periodo_liq, quincena_pago, generar_nomina, salario_base,
-            dias_laborados, horas_laboradas, dias_vacaciones, dias_incapacidad,
+            dias_laborados, horas_laboradas, dias_vacaciones, dias_incapacidad, dias_licencia,
             prestamos, prima_calc, hed, hen, hedf, henf, rn, rdn, rnf, observaciones,
             ibc_pila, salud_4, pension_4, total_devengado, total_deducido, neto_pagar,
             vlr_bono, sal_especie, tiene_aux
         ) VALUES (
             :id_contrato, :periodo_liq, :quincena_pago, :generar_nomina, :salario_base,
-            :dias_laborados, :horas_laboradas, :dias_vacaciones, :dias_incapacidad,
+            :dias_laborados, :horas_laboradas, :dias_vacaciones, :dias_incapacidad, :dias_licencia,
             :prestamos, :prima_calc, :hed, :hen, :hedf, :henf, :rn, :rdn, :rnf, :observaciones,
             :ibc_pila, :salud_4, :pension_4, :total_devengado, :total_deducido, :neto_pagar,
             :vlr_bono, :sal_especie, :tiene_aux
@@ -1774,6 +1786,7 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
             horas_laboradas = EXCLUDED.horas_laboradas,
             dias_vacaciones = EXCLUDED.dias_vacaciones,
             dias_incapacidad = EXCLUDED.dias_incapacidad,
+            dias_licencia = EXCLUDED.dias_licencia,
             prestamos = EXCLUDED.prestamos,
             prima_calc = EXCLUDED.prima_calc,
             hed = EXCLUDED.hed,
@@ -1810,6 +1823,7 @@ def guardar_historico(payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Bod
                 "horas_laboradas": forzar_numero(row.get('HORAS_LABORADAS', 0)),
                 "dias_vacaciones": forzar_numero(row.get('DIAS_VACACIONES', 0)),
                 "dias_incapacidad": forzar_numero(row.get('DIAS_INCAPACIDAD', 0)),
+                "dias_licencia": forzar_numero(row.get('DIAS_LICENCIA', 0)),
                 "prestamos": forzar_numero(row.get('PRESTAMOS', 0)),
                 "prima_calc": forzar_numero(row.get('PRIMA_CALC', 0)),
                 "hed": forzar_numero(row.get('HED', 0)),
@@ -2425,3 +2439,224 @@ def reporte_facturacion(periodo: str = None, quincena: str = None, db: Session =
         })
 
     return {"status": "success", "data": data}
+
+@app.get("/api/v1/novedades/{id_contrato}")
+def obtener_novedad_periodo(id_contrato: str, periodo_liq: str, quincena_pago: str = "1", db: Session = Depends(get_db)):
+    try:
+        nov = db.query(models.Novedad).filter(
+            models.Novedad.id_contrato == id_contrato,
+            models.Novedad.periodo_liq == periodo_liq,
+            models.Novedad.quincena_pago == quincena_pago
+        ).first()
+        if nov:
+            return {"status": "success", "data": {
+                "SALARIO_BASE": float(nov.salario_base or 0),
+                "DIAS_LABORADOS": float(nov.dias_laborados or 0),
+                "HORAS_LABORADAS": float(nov.horas_laboradas or 0),
+                "DIAS_VACACIONES": float(nov.dias_vacaciones or 0),
+                "DIAS_INCAPACIDAD": float(nov.dias_incapacidad or 0),
+                "DIAS_LICENCIA": float(nov.dias_licencia or 0),
+                "PRESTAMOS": float(nov.prestamos or 0),
+                "PRIMA_CALC": float(nov.prima_calc or 0),
+                "HED": float(nov.hed or 0),
+                "HEN": float(nov.hen or 0),
+                "HEDF": float(nov.hedf or 0),
+                "HENF": float(nov.henf or 0),
+                "RN": float(nov.rn or 0),
+                "RDN": float(nov.rdn or 0),
+                "RNF": float(nov.rnf or 0),
+                "VLR_BONO": float(nov.vlr_bono or 0),
+                "SALARIO_ESPECIE": float(nov.sal_especie or 0),
+                "OBSERVACIONES": nov.observaciones or ""
+            }}
+        return {"status": "success", "data": None}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/v1/empleado/{id_contrato}/ausentismos")
+def listar_ausentismos(
+    id_contrato: str, 
+    periodo_liq: Optional[str] = None,
+    quincena_pago: Optional[str] = None,
+    current_user: dict = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    query = db.query(models.Ausentismo).filter(models.Ausentismo.id_contrato == id_contrato)
+    
+    if periodo_liq:
+        query = query.filter(models.Ausentismo.periodo_liq == periodo_liq)
+    if quincena_pago:
+        query = query.filter(models.Ausentismo.quincena_pago == quincena_pago)
+        
+    ausentismos = query.order_by(models.Ausentismo.fecha_inicio.desc()).all()
+    
+    # Firmar URLs al vuelo (Signed URLs) para proteger los archivos médicos
+    for aus in ausentismos:
+        if aus.soporte_url and not aus.soporte_url.startswith("http"):
+            try:
+                # Generar una URL firmada válida por 60 segundos (1 minuto)
+                signed_res = supabase_client.storage.from_("soportes_incapacidades").create_signed_url(aus.soporte_url, 60)
+                if signed_res and "signedURL" in signed_res:
+                    aus.soporte_url = signed_res["signedURL"]
+            except Exception as e:
+                logging.error(f"Error firmando URL para {aus.soporte_url}: {e}")
+                
+    return ausentismos
+
+@app.post("/api/v1/empleado/{id_contrato}/ausentismos")
+async def crear_ausentismo(
+    id_contrato: str, 
+    tipo_novedad: str = Form(...),
+    fecha_inicio: datetime.date = Form(...),
+    fecha_fin: datetime.date = Form(...),
+    observaciones: Optional[str] = Form(None),
+    tramitar_reembolso: bool = Form(False),
+    periodo_liq: Optional[str] = Form(None),
+    quincena_pago: Optional[str] = Form(None),
+    soporte_medico: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """
+    Crea un ausentismo verificando traslapo de fechas y almacenando el soporte médico si aplica.
+    """
+    # 1. Validación de cordura cronológica
+    if fecha_inicio > fecha_fin:
+        raise HTTPException(status_code=400, detail="La fecha de inicio no puede ser mayor a la fecha de fin.")
+
+    # 2. Validación de traslapo (Overlapping Candado)
+    traslapo = db.query(models.Ausentismo)\
+        .filter(models.Ausentismo.id_contrato == id_contrato)\
+        .filter(models.Ausentismo.fecha_inicio <= fecha_fin)\
+        .filter(models.Ausentismo.fecha_fin >= fecha_inicio)\
+        .first()
+    
+    if traslapo:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Ya existe un ausentismo ({traslapo.tipo_novedad}) que se traslapa con este rango de fechas."
+        )
+
+    # 3. Cálculo de días totales
+    dias = (fecha_fin - fecha_inicio).days + 1
+
+    # 4. Inserción Transaccional y Manejo de Almacenamiento (Supabase Storage)
+    try:
+        nuevo_ausentismo = models.Ausentismo(
+            id_contrato=id_contrato,
+            tipo_novedad=tipo_novedad,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            dias_totales=dias,
+            observaciones=observaciones,
+            soporte_url=None,
+            tramitar_reembolso=tramitar_reembolso,
+            periodo_liq=periodo_liq,
+            quincena_pago=quincena_pago
+        )
+        db.add(nuevo_ausentismo)
+
+        if soporte_medico and soporte_medico.filename:
+            ext = soporte_medico.filename.split(".")[-1]
+            safe_filename = f"{id_contrato}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.{ext}"
+            
+            file_bytes = await soporte_medico.read()
+            supabase_client.storage.from_("soportes_incapacidades").upload(
+                safe_filename,
+                file_bytes,
+                file_options={"content-type": soporte_medico.content_type}
+            )
+            # Almacenar únicamente el path interno por privacidad (No usar get_public_url)
+            nuevo_ausentismo.soporte_url = safe_filename
+
+        db.commit()
+        db.refresh(nuevo_ausentismo)
+        return {
+            "status": "success",
+            "message": "Ausentismo registrado correctamente",
+            "data": {
+                "id_ausentismo": str(nuevo_ausentismo.id_ausentismo),
+                "tipo_novedad": nuevo_ausentismo.tipo_novedad,
+                "fecha_inicio": str(nuevo_ausentismo.fecha_inicio),
+                "fecha_fin": str(nuevo_ausentismo.fecha_fin),
+                "dias_totales": float(nuevo_ausentismo.dias_totales),
+                "soporte_url": nuevo_ausentismo.soporte_url
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error al registrar el ausentismo o subir el soporte: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/v1/ausentismos/{id_ausentismo}")
+def eliminar_ausentismo(id_ausentismo: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    try:
+        ausentismo = db.query(models.Ausentismo).filter(models.Ausentismo.id_ausentismo == id_ausentismo).first()
+        if not ausentismo:
+            raise HTTPException(status_code=404, detail="Ausentismo no encontrado")
+        
+        if ausentismo.soporte_url and not ausentismo.soporte_url.startswith("http"):
+            clean_path = ausentismo.soporte_url.strip()
+            try:
+                res = supabase_client.storage.from_("soportes_incapacidades").remove([clean_path])
+                print(f"[STORAGE] Intento de eliminar '{clean_path}'. Respuesta: {res}")
+            except Exception as e:
+                print(f"[STORAGE] Error al eliminar archivo físico: {e}")
+
+        # Después de intentar borrar el archivo, borramos el registro
+        try:
+            db.delete(ausentismo)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Error eliminando registro en BD")
+            
+        return {"status": "success", "message": "Ausentismo eliminado correctamente"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error al eliminar ausentismo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/ausentismos/{id_ausentismo}/soporte")
+def ver_soporte_ausentismo(id_ausentismo: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    ausentismo = db.query(models.Ausentismo).filter(models.Ausentismo.id_ausentismo == id_ausentismo).first()
+    if not ausentismo:
+        raise HTTPException(status_code=404, detail="Ausentismo no encontrado")
+    if not ausentismo.soporte_url:
+        raise HTTPException(status_code=404, detail="El ausentismo no tiene soporte adjunto")
+    
+    if ausentismo.soporte_url.startswith("http"):
+        return {"url": ausentismo.soporte_url}
+
+    clean_path = ausentismo.soporte_url.strip()
+    
+    # --- RADAR DE DEBUG ---
+    try:
+        lista_archivos = supabase_client.storage.from_("soportes_incapacidades").list()
+        nombres_reales = [f.get("name") for f in lista_archivos] if lista_archivos else []
+        print(f"[RADAR] Buscando en BD: '{clean_path}'")
+        print(f"[RADAR] Archivos en Bucket: {nombres_reales}")
+        if clean_path not in nombres_reales:
+            print(f"[RADAR ALERTA] '{clean_path}' NO coincide exactamente con ningún archivo en el bucket.")
+    except Exception as e:
+        print(f"[RADAR] Fallo listando archivos: {e}")
+    # ----------------------
+
+    try:
+        res = supabase_client.storage.from_("soportes_incapacidades").create_signed_url(clean_path, 60)
+        
+        # Validar si Supabase devolvió un error (dict con 'error')
+        if isinstance(res, dict) and res.get("error"):
+            logging.error(f"Error de Supabase Storage: {res}")
+            raise HTTPException(status_code=404, detail="El archivo físico no se encontró en el servidor de almacenamiento.")
+            
+        signed_url = res.get("signedURL") if isinstance(res, dict) else res
+        return {"url": signed_url}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error crítico generando Signed URL: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar el documento.")

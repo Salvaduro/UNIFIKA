@@ -1,6 +1,6 @@
 import uuid
 import datetime
-from sqlalchemy import Column, String, Boolean, Numeric, Text, TIMESTAMP, ForeignKey, JSON
+from sqlalchemy import Column, String, Boolean, Numeric, Text, TIMESTAMP, ForeignKey, JSON, Date
 from sqlalchemy.orm import relationship
 from enum import StrEnum
 from database import Base
@@ -99,6 +99,8 @@ class Empleado(Base):
     aportante = relationship("Aportante", back_populates="empleados")
     # Relación con t_novedades
     novedades = relationship("Novedad", back_populates="empleado", cascade="all, delete-orphan")
+    # Relación con t_ausentismos
+    ausentismos = relationship("Ausentismo", back_populates="empleado", cascade="all, delete-orphan")
 
 
 class Novedad(Base):
@@ -120,6 +122,7 @@ class Novedad(Base):
     horas_laboradas = Column(Numeric(5, 2), default=0)
     dias_vacaciones = Column(Numeric(5, 2), default=0)
     dias_incapacidad = Column(Numeric(5, 2), default=0)
+    dias_licencia = Column(Numeric(5, 2), default=0)
     prestamos = Column(Numeric(12, 2), default=0)
     prima_calc = Column(Numeric(12, 2), default=0)
     hed = Column(Numeric(5, 2), default=0)
@@ -174,3 +177,24 @@ class AuditoriaLog(Base):
     tipo_accion = Column(String(100), nullable=False)
     entidad_afectada = Column(String(100), nullable=True)
     detalles = Column(JSON, nullable=True)
+
+
+class Ausentismo(Base):
+    __tablename__ = "t_ausentismos"
+
+    id_ausentismo = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_contrato = Column(String(50), ForeignKey("m_empleados.id_contrato", ondelete="CASCADE"), nullable=False)
+    tipo_novedad = Column(String(50), nullable=False)
+    fecha_inicio = Column(Date, nullable=False)
+    fecha_fin = Column(Date, nullable=False)
+    dias_totales = Column(Numeric(5, 2), default=0)
+    estado = Column(String(50), default="PROGRAMADO")
+    observaciones = Column(Text, nullable=True)
+    soporte_url = Column(Text, nullable=True)
+    tramitar_reembolso = Column(Boolean, default=False)
+    periodo_liq = Column(String(50), nullable=True)
+    quincena_pago = Column(String(50), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), default=datetime.datetime.utcnow)
+
+    # Relación con Empleado
+    empleado = relationship("Empleado", back_populates="ausentismos")

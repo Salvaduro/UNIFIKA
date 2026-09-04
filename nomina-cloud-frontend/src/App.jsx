@@ -133,6 +133,17 @@ function App() {
   const [isCerrado, setIsCerrado] = useState(false);
   const [carpetaCliente, setCarpetaCliente] = useState(null);
 
+  // Fase 7: Estados de Ausentismo
+  const [isAusentismoModalOpen, setIsAusentismoModalOpen] = useState(false);
+  const [ausentismosLocales, setAusentismosLocales] = useState([]);
+  const [nuevoAusentismo, setNuevoAusentismo] = useState({
+    tipo_novedad: "Incapacidad",
+    fecha_inicio: "",
+    fecha_fin: ""
+  });
+  const [tramitarReembolso, setTramitarReembolso] = useState(false);
+  const [soporteMedico, setSoporteMedico] = useState(null);
+
   const calcularPeriodoPorDefecto = () => {
     const hoy = new Date();
     const meses = [
@@ -318,6 +329,77 @@ function App() {
     }
   }, [session, perfilAportante]);
 
+  const hidratarLiquidacion = async (idContrato, pLiq, qPago) => {
+    if (!idContrato || !pLiq || !qPago) return;
+    
+    try {
+        const resNov = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/novedades/${encodeURIComponent(idContrato)}?periodo_liq=${encodeURIComponent(pLiq)}&quincena_pago=${encodeURIComponent(qPago)}`);
+        
+        if (resNov.ok) {
+            const dataNov = await resNov.json();
+            if (dataNov.status === "success" && dataNov.data) {
+                setFormData(prev => ({ ...prev, ...dataNov.data }));
+            }
+        }
+
+        const resAus = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/empleado/${encodeURIComponent(idContrato)}/ausentismos?periodo_liq=${encodeURIComponent(pLiq)}&quincena_pago=${encodeURIComponent(qPago)}`);
+        
+        if (resAus.ok) {
+            const dataAus = await resAus.json();
+            if (dataAus && dataAus.data) {
+                setAusentismosLocales(dataAus.data);
+            } else if (Array.isArray(dataAus)) {
+                setAusentismosLocales(dataAus);
+            } else {
+                setAusentismosLocales([]);
+            }
+        } else {
+            setAusentismosLocales([]);
+        }
+    } catch (error) {
+        console.error("Error en hidratación maestra:", error);
+    }
+  };
+
+  useEffect(() => {
+    hidratarLiquidacion(selectedEmpleadoId, periodoLiq, quincenaPago);
+  }, [selectedEmpleadoId, periodoLiq, quincenaPago]);
+
+  useEffect(() => {
+    const lista = ausentismosLocales || [];
+    
+    let tIncapacidad = 0, tVacaciones = 0, tLicencia = 0;
+
+    lista.forEach((a) => {
+        const safeObj = a?.data || a || {};
+        
+        const rawTipo = safeObj.tipo_novedad || safeObj.tipoNovedad || safeObj.tipo || "";
+        const tipo = String(rawTipo).toUpperCase();
+        
+        // 1. Intentar buscar la propiedad directa
+        let dias = parseFloat(safeObj.dias_totales || safeObj.diasTotales || safeObj.dias) || 0;
+        
+        // 2. Si no existe, calcularla matemáticamente con las fechas
+        if (dias === 0 && safeObj.fecha_inicio && safeObj.fecha_fin) {
+            const inicio = new Date(safeObj.fecha_inicio);
+            const fin = new Date(safeObj.fecha_fin);
+            // Diferencia en milisegundos a días (+1 para que sea inclusivo)
+            dias = Math.round((fin - inicio) / (1000 * 60 * 60 * 24)) + 1;
+        }
+
+        if (tipo.includes("INCAPACIDAD") || tipo.includes("IGE")) tIncapacidad += dias;
+        else if (tipo.includes("VACACION") || tipo.includes("VAC")) tVacaciones += dias;
+        else if (tipo.includes("LICENCIA") || tipo.includes("SLN") || tipo.includes("PERMISO") || tipo.includes("NO REMUNERADA")) tLicencia += dias;
+    });
+    
+    setFormData(prev => ({
+        ...prev,
+        DIAS_INCAPACIDAD: tIncapacidad,
+        DIAS_VACACIONES: tVacaciones,
+        DIAS_LICENCIA: tLicencia
+    }));
+  }, [ausentismosLocales]);
+
   // Efecto para auto-calcular el periodo actual
   useEffect(() => {
     const date = new Date();
@@ -406,8 +488,9 @@ function App() {
         PERIODO_PAGO: empleado.PERIODO_PAGO || prev.PERIODO_PAGO,
         DIAS_LABORADOS: diasPorDefecto,
         HORAS_LABORADAS: 0,
-        DIAS_VACACIONES: 0,
-        DIAS_INCAPACIDAD: 0,
+        DIAS_VACACIONES: prev.DIAS_VACACIONES || 0,
+        DIAS_INCAPACIDAD: prev.DIAS_INCAPACIDAD || 0,
+        DIAS_LICENCIA: prev.DIAS_LICENCIA || 0,
         PRESTAMOS: 0,
         PRIMA_CALC: 0,
         HED: 0,
@@ -638,6 +721,8 @@ function App() {
       const data = await response.json();
       if (data.status === "success" && data.data) {
         autocompletarFormulario(data.data);
+        // La hidratación maestra se encargará de sobreescribir el formData y ausentismosLocales 
+        // a través del useEffect reactivo al cambiar los estados.
       } else {
         throw new Error("Respuesta del servidor sin status success o sin data");
       }
@@ -812,9 +897,6 @@ function App() {
   };
 
   // ==========================================
-  // BLOQUE 4: LIQUIDACIÓN DE NÓMINA (SUBMIT)
-  // ==========================================
-  // ==========================================
   // BLOQUE 4: REPORTE DE FACTURACION (STAFF)
   // ==========================================
   const handleConsultarReporte = async () => {
@@ -907,6 +989,9 @@ function App() {
           DIAS_INCAPACIDAD: formData.DIAS_INCAPACIDAD
             ? Number(formData.DIAS_INCAPACIDAD)
             : 0,
+          DIAS_LICENCIA: formData.DIAS_LICENCIA
+            ? Number(formData.DIAS_LICENCIA)
+            : 0,
           HED: formData.REPORTAR_EXTRAS === "SI" ? Number(formData.HED) : 0,
           HEN: formData.REPORTAR_EXTRAS === "SI" ? Number(formData.HEN) : 0,
           HEDF: formData.REPORTAR_EXTRAS === "SI" ? Number(formData.HEDF) : 0,
@@ -916,6 +1001,7 @@ function App() {
           RNF: formData.REPORTAR_EXTRAS === "SI" ? Number(formData.RNF) : 0,
           EPS: formData.EPS,
           FONDO_PENSIONES: formData.FONDO_PENSIONES,
+          ausentismos: ausentismosLocales,
         },
       ];
 
@@ -1178,6 +1264,7 @@ function App() {
   // ==========================================
   // BLOQUE 5: RENDERIZADO UI (COMPONENTES)
   // ==========================================
+
   return (
     <IdleTimer>
       <Toaster position="top-right" />
@@ -1595,7 +1682,7 @@ function App() {
                         </div>
 
                         <div className="p-6">
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
                             {/* Días Laborados */}
                             <div>
                               <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -1627,12 +1714,9 @@ function App() {
                               <input
                                 type="number"
                                 name="DIAS_VACACIONES"
-                                value={formData.DIAS_VACACIONES}
-                                onChange={handleInputChange}
-                                min="0"
-                                max="30"
-                                step="any"
-                                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary transition-all text-slate-900 outline-none"
+                                value={formData.DIAS_VACACIONES || 0}
+                                readOnly
+                                className="w-full px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed outline-none"
                                 required
                               />
                             </div>
@@ -1645,15 +1729,34 @@ function App() {
                               <input
                                 type="number"
                                 name="DIAS_INCAPACIDAD"
-                                value={formData.DIAS_INCAPACIDAD}
-                                onChange={handleInputChange}
-                                min="0"
-                                max="30"
-                                step="any"
-                                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-unifika-primary focus:border-unifika-primary transition-all text-slate-900 outline-none"
+                                value={formData.DIAS_INCAPACIDAD || 0}
+                                readOnly
+                                className="w-full px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed outline-none"
                                 required
                               />
                             </div>
+                            
+                            {/* Días Licencia */}
+                            <div>
+                              <label className="block text-sm font-semibold text-slate-700 mb-2">Días Licencia</label>
+                              <input 
+                                type="number" 
+                                name="DIAS_LICENCIA"
+                                value={formData.DIAS_LICENCIA || 0} 
+                                readOnly 
+                                className="w-full px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed outline-none" 
+                              />
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setIsAusentismoModalOpen(true)}
+                              className="px-5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl transition-colors border border-indigo-200 flex items-center gap-2 text-sm"
+                            >
+                              📅 Gestionar Ausentismos
+                            </button>
                           </div>
 
                           {/* NOVEDADES: EXTRAS Y PRÉSTAMOS */}
@@ -2677,6 +2780,292 @@ function App() {
           )}
         </main>
       </div>
+
+      {/* MODAL GESTION DE AUSENTISMOS */}
+      {isAusentismoModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span>📅</span> Gestión de Ausentismos
+              </h3>
+              <button
+                onClick={() => {
+                  setIsAusentismoModalOpen(false);
+                  setTramitarReembolso(false);
+                  setSoporteMedico(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 transition-colors p-1"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto">
+              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wider">Tipo de Novedad</label>
+                    <select
+                      value={nuevoAusentismo.tipo_novedad}
+                      onChange={(e) => {
+                        setNuevoAusentismo({...nuevoAusentismo, tipo_novedad: e.target.value});
+                        setTramitarReembolso(false);
+                        setSoporteMedico(null);
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                    >
+                      <option value="Incapacidad">Incapacidad</option>
+                      <option value="Vacaciones">Vacaciones</option>
+                      <option value="Licencia No Remunerada">Licencia No Remunerada</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wider">Fecha Inicio</label>
+                    <input
+                      type="date"
+                      value={nuevoAusentismo.fecha_inicio}
+                      onChange={(e) => setNuevoAusentismo({...nuevoAusentismo, fecha_inicio: e.target.value})}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wider">Fecha Fin</label>
+                    <input
+                      type="date"
+                      value={nuevoAusentismo.fecha_fin}
+                      onChange={(e) => setNuevoAusentismo({...nuevoAusentismo, fecha_fin: e.target.value})}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                    />
+                  </div>
+                </div>
+
+                {/* Renderizado Condicional: Incapacidad y Reembolso */}
+                {nuevoAusentismo.tipo_novedad === "Incapacidad" && (
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-center bg-white p-4 rounded-xl border border-indigo-50">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="tramitarReembolso"
+                        checked={tramitarReembolso}
+                        onChange={(e) => setTramitarReembolso(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <label htmlFor="tramitarReembolso" className="text-sm font-semibold text-slate-700 cursor-pointer">
+                        Deseo tramitar el reembolso ante la EPS
+                      </label>
+                    </div>
+                    
+                    {tramitarReembolso && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wider">
+                          Soporte Médico (Obligatorio &gt; 2 días)
+                        </label>
+                        <input
+                          type="file"
+                          accept=".pdf, image/*"
+                          onChange={(e) => setSoporteMedico(e.target.files[0] || null)}
+                          className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!nuevoAusentismo.fecha_inicio || !nuevoAusentismo.fecha_fin) {
+                        toast.error("Por favor ingresa fecha de inicio y fin.");
+                        return;
+                      }
+                      if (nuevoAusentismo.fecha_inicio > nuevoAusentismo.fecha_fin) {
+                        toast.error("La fecha de inicio no puede ser mayor a la fecha de fin.");
+                        return;
+                      }
+
+                      // Cálculo de días nativo para validación
+                      const ms = new Date(nuevoAusentismo.fecha_fin) - new Date(nuevoAusentismo.fecha_inicio);
+                      const dias = Math.ceil(ms / (1000 * 60 * 60 * 24)) + 1;
+
+                      // Validación estricta para Incapacidades
+                      if (nuevoAusentismo.tipo_novedad === "Incapacidad" && tramitarReembolso) {
+                        if (dias >= 3 && dias <= 180) {
+                          if (!soporteMedico) {
+                            toast.error("Debe adjuntar el certificado médico para tramitar el reembolso ante la EPS.");
+                            return;
+                          }
+                        }
+                      }
+                      
+                      const targetId = selectedEmpleadoId || formData.ID_CONTRATO;
+                      if (!targetId) {
+                        toast.error("No hay un empleado seleccionado.");
+                        return;
+                      }
+
+                      const formDataToSend = new FormData();
+                      formDataToSend.append("tipo_novedad", nuevoAusentismo.tipo_novedad);
+                      formDataToSend.append("fecha_inicio", nuevoAusentismo.fecha_inicio);
+                      formDataToSend.append("fecha_fin", nuevoAusentismo.fecha_fin);
+                      formDataToSend.append("tramitar_reembolso", nuevoAusentismo.tipo_novedad === "Incapacidad" ? tramitarReembolso : false);
+                      if (periodoLiq) formDataToSend.append("periodo_liq", periodoLiq);
+                      if (quincenaPago) formDataToSend.append("quincena_pago", quincenaPago);
+                      
+                      if (soporteMedico) {
+                        formDataToSend.append("soporte_medico", soporteMedico);
+                      }
+
+                      const loadingToast = toast.loading("Guardando ausentismo en la nube...");
+                      try {
+                        const response = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/empleado/${encodeURIComponent(targetId)}/ausentismos`, {
+                          method: 'POST',
+                          body: formDataToSend
+                        });
+                        
+                        toast.dismiss(loadingToast);
+                        
+                        if (!response.ok) {
+                          const errData = await response.json();
+                          toast.error(errData.detail || "Error al guardar el ausentismo");
+                          return;
+                        }
+                        
+                        const dataGuardada = await response.json();
+                        const responseData = dataGuardada.data || dataGuardada;
+                        
+                        const nuevaLista = [...ausentismosLocales, { 
+                          ...nuevoAusentismo, 
+                          tramitar_reembolso: responseData.tramitar_reembolso ?? tramitarReembolso,
+                          soporte_url: responseData.soporte_url,
+                          id_temp: responseData.id_ausentismo || Date.now().toString() 
+                        }];
+                        setAusentismosLocales(nuevaLista);
+                        
+                        // Limpieza
+                        setNuevoAusentismo({ tipo_novedad: "Incapacidad", fecha_inicio: "", fecha_fin: "" });
+                        setTramitarReembolso(false);
+                        setSoporteMedico(null);
+                        toast.success("Ausentismo sincronizado exitosamente.");
+                        
+                      } catch (error) {
+                        toast.dismiss(loadingToast);
+                        toast.error(error.response?.data?.detail || error.message || "Error al intentar guardar.");
+                      }
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors text-sm"
+                  >
+                    + Agregar Rango
+                  </button>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600 uppercase text-[11px] font-bold">
+                    <tr>
+                      <th className="px-4 py-3">Tipo</th>
+                      <th className="px-4 py-3">Inicio</th>
+                      <th className="px-4 py-3">Fin</th>
+                      <th className="px-4 py-3 text-center">Días</th>
+                      <th className="px-4 py-3 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {ausentismosLocales.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" className="px-4 py-6 text-center text-slate-400">No has agregado ausentismos para este periodo.</td>
+                      </tr>
+                    ) : (
+                      ausentismosLocales.map((aus, idx) => {
+                        const ms = new Date(aus.fecha_fin) - new Date(aus.fecha_inicio);
+                        const dias = Math.ceil(ms / (1000 * 60 * 60 * 24)) + 1;
+                        return (
+                          <tr key={aus.id_temp || idx} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-medium text-slate-700">{aus.tipo_novedad}</td>
+                            <td className="px-4 py-3 text-slate-600">{aus.fecha_inicio}</td>
+                            <td className="px-4 py-3 text-slate-600">{aus.fecha_fin}</td>
+                            <td className="px-4 py-3 text-center font-bold text-slate-800">{dias}</td>
+                            <td className="px-4 py-3 text-center flex justify-center items-center space-x-2">
+                              {(aus.soporte_url || aus.tramitar_reembolso) && (
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      const loadingToast = toast.loading("Obteniendo documento...");
+                                      const targetId = aus.id_ausentismo || aus.id_temp;
+                                      const response = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/ausentismos/${encodeURIComponent(targetId)}/soporte`);
+                                      toast.dismiss(loadingToast);
+                                      
+                                      if (response.ok) {
+                                        const data = await response.json();
+                                        window.open(data.url, '_blank');
+                                      } else {
+                                        const errorData = await response.json().catch(() => ({}));
+                                        toast.error(errorData.detail || "No se pudo obtener el soporte médico");
+                                      }
+                                    } catch (err) {
+                                      console.error("Error al abrir soporte:", err);
+                                      toast.dismiss();
+                                      const msj = err.response?.data?.detail || "Error al intentar abrir el soporte";
+                                      toast.error(msj);
+                                    }
+                                  }}
+                                  className="text-indigo-500 hover:text-indigo-700 p-1 transition-colors"
+                                  title="Ver Soporte Médico"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                                </button>
+                              )}
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    const targetId = aus.id_ausentismo || aus.id_temp;
+                                    const response = await apiClient(`${import.meta.env.VITE_API_URL}/api/v1/ausentismos/${encodeURIComponent(targetId)}`, {
+                                      method: 'DELETE'
+                                    });
+                                    if (response.ok) {
+                                      const newList = ausentismosLocales.filter(a => (a.id_ausentismo || a.id_temp) !== targetId);
+                                      setAusentismosLocales(newList);
+                                      toast.success("Ausentismo eliminado");
+                                    } else {
+                                      const errData = await response.json().catch(() => ({}));
+                                      toast.error(errData.detail || "Error al eliminar en el servidor");
+                                    }
+                                  } catch (error) {
+                                    console.error("Error eliminando ausentismo:", error);
+                                    toast.error("Error de red al intentar eliminar.");
+                                  }
+                                }}
+                                className="text-rose-500 hover:text-rose-700 p-1"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => {
+                  setIsAusentismoModalOpen(false);
+                  setTramitarReembolso(false);
+                  setSoporteMedico(null);
+                }}
+                className="px-6 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors"
+              >
+                Aceptar y Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </IdleTimer>
   );
 }
