@@ -43,7 +43,7 @@ async def sync_aportante_from_wolkvox(id_aportante: str, db: Session) -> dict:
         logger.error("[ERROR-SYNC-APORTANTE] WOLKVOX_TOKEN no configurado.")
         return None
 
-    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+    url_wolkvox = "https://crm005.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
     
     payload_contacto = {
@@ -136,7 +136,7 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
         target_empleado_id = str(target_empleado_id)
         
     wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
-    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+    url_wolkvox = "https://crm005.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"wolkvox-token": wolkvox_token, "Content-Type": "application/json"}
     
     if not razon_social or str(razon_social).strip() == "" or str(razon_social).strip().lower() == "none":

@@ -186,7 +186,7 @@ async def get_current_user_unblocked(
                     detail="No encontramos tu correo en nuestro sistema. Por favor, comunícate al Tel. 333 6025560 para brindarte atención."
                 )
 
-            url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+            url_wolkvox = "https://crm005.wolkvox.com/server/API/v2/custom/query.php"
             headers = {"Content-Type": "application/json"}
             payload_contacto = {
                 "operation": "techcon",

@@ -275,7 +275,7 @@ async def sync_auth_status(current_user: dict = Depends(get_current_user_unblock
         # Fallback si no hay token de Wolkvox
         return {"estado_contacto": current_user.get("estado_contacto")}
 
-    url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+    url_wolkvox = "https://crm005.wolkvox.com/server/API/v2/custom/query.php"
     headers = {"Content-Type": "application/json"}
     payload_contacto = {
         "operation": "techcon",
@@ -384,7 +384,7 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         logger.info(f"[WOLKVOX] ⚠️ Aportante {id_contacto} no encontrado localmente. Extrayendo desde Wolkvox (JiT)...")
         wolkvox_token = os.getenv("WOLKVOX_TOKEN", "")
         if wolkvox_token:
-            url_wolkvox = "https://crm.wolkvox.com/server/API/v2/custom/query.php"
+            url_wolkvox = "https://crm005.wolkvox.com/server/API/v2/custom/query.php"
             headers = {"Content-Type": "application/json"}
             payload_contacto = {
                 "operation": "techcon",
