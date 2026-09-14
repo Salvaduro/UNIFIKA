@@ -2235,7 +2235,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     </div>
                                 </div>
                                 """
-                                nombre_empleado_cron = emp.nombre if emp.nombre else "Empleado"
+                                nombre_empleado_cron = emp.nombre_empleado if emp.nombre_empleado else "Empleado"
                                 periodo_pago_cron = str(emp.periodo_pago).strip().upper() if emp.periodo_pago else 'QUINCENAL'
                                 
                                 if periodo_pago_cron == "QUINCENAL":
@@ -2660,3 +2660,289 @@ def ver_soporte_ausentismo(id_ausentismo: str, db: Session = Depends(get_db), cu
     except Exception as e:
         logging.error(f"Error crítico generando Signed URL: {e}")
         raise HTTPException(status_code=500, detail="Error interno del servidor al procesar el documento.")
+
+from fastapi.responses import Response
+from core.pila_engine import generar_txt_pila
+import urllib.parse
+
+# ==========================================
+# NUEVO ENDPOINT: DESCARGAR PILA TXT
+# ==========================================
+@app.get("/api/v1/pila/descargar-txt/{id_aportante}/{periodo}/{quincena}")
+def descargar_pila_txt(id_aportante: str, periodo: str, quincena: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint para descargar el archivo plano PILA (TXT) generado al vuelo (Stateless).
+    SOLO para SUPERADMIN.
+    """
+    if str(current_user.get("rol", "")).upper() != "SUPERADMIN":
+        raise HTTPException(status_code=403, detail="Acceso denegado. Solo SUPERADMIN puede generar el archivo PILA.")
+    
+    try:
+        # 1. Llamar al motor stateless para generar el string del archivo
+        txt_content = generar_txt_pila(id_aportante, periodo, quincena, db)
+        
+        # 2. Formatear el nombre del archivo
+        periodo_str = periodo.replace(" ", "_").upper()
+        nombre_archivo = f"PILA_{id_aportante}_{periodo_str}_Q{quincena}.txt"
+        
+        # 3. Retornar los bytes en memoria como attachment
+        return Response(
+            content=txt_content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error generando el archivo plano: {str(e)}")
+
+# ==========================================
+# ENDPOINT ORIGINAL: LISTAR AUSENTISMOS (Restaurado)
+# ==========================================
+@app.get("/api/v1/empleado/{id_contrato}/ausentismos")
+def listar_ausentismos(
+    id_contrato: str, 
+    periodo_liq: Optional[str] = None,
+    quincena_pago: Optional[str] = None,
+    current_user: dict = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    query = db.query(models.Ausentismo).filter(models.Ausentismo.id_contrato == id_contrato)
+    
+    if periodo_liq:
+        query = query.filter(models.Ausentismo.periodo_liq == periodo_liq)
+    if quincena_pago:
+        query = query.filter(models.Ausentismo.quincena_pago == quincena_pago)
+        
+    ausentismos = query.order_by(models.Ausentismo.fecha_inicio.desc()).all()
+    
+    # Firmar URLs al vuelo (Signed URLs) para proteger los archivos médicos
+    for aus in ausentismos:
+        if aus.soporte_url and not aus.soporte_url.startswith("http"):
+            try:
+                # Generar una URL firmada válida por 60 segundos (1 minuto)
+                signed_res = supabase_client.storage.from_("soportes_incapacidades").create_signed_url(aus.soporte_url, 60)
+                if signed_res and "signedURL" in signed_res:
+                    aus.soporte_url = signed_res["signedURL"]
+            except Exception as e:
+                logging.error(f"Error firmando URL para {aus.soporte_url}: {e}")
+                
+    return ausentismos
+
+@app.post("/api/v1/empleado/{id_contrato}/ausentismos")
+async def crear_ausentismo(
+    id_contrato: str, 
+    tipo_novedad: str = Form(...),
+    fecha_inicio: datetime.date = Form(...),
+    fecha_fin: datetime.date = Form(...),
+    observaciones: Optional[str] = Form(None),
+    tramitar_reembolso: bool = Form(False),
+    periodo_liq: Optional[str] = Form(None),
+    quincena_pago: Optional[str] = Form(None),
+    soporte_medico: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """
+    Crea un ausentismo verificando traslapo de fechas y almacenando el soporte médico si aplica.
+    """
+    # 1. Validación de cordura cronológica
+    if fecha_inicio > fecha_fin:
+        raise HTTPException(status_code=400, detail="La fecha de inicio no puede ser mayor a la fecha de fin.")
+
+    # 2. Validación de traslapo (Overlapping Candado)
+    traslapo = db.query(models.Ausentismo)\
+        .filter(models.Ausentismo.id_contrato == id_contrato)\
+        .filter(models.Ausentismo.fecha_inicio <= fecha_fin)\
+        .filter(models.Ausentismo.fecha_fin >= fecha_inicio)\
+        .first()
+    
+    if traslapo:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Ya existe un ausentismo ({traslapo.tipo_novedad}) que se traslapa con este rango de fechas."
+        )
+
+    # 3. Cálculo de días totales
+    dias = (fecha_fin - fecha_inicio).days + 1
+
+    # 4. Inserción Transaccional y Manejo de Almacenamiento (Supabase Storage)
+    try:
+        nuevo_ausentismo = models.Ausentismo(
+            id_contrato=id_contrato,
+            tipo_novedad=tipo_novedad,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            dias_totales=dias,
+            observaciones=observaciones,
+            soporte_url=None,
+            tramitar_reembolso=tramitar_reembolso,
+            periodo_liq=periodo_liq,
+            quincena_pago=quincena_pago
+        )
+        db.add(nuevo_ausentismo)
+
+        if soporte_medico and soporte_medico.filename:
+            ext = soporte_medico.filename.split(".")[-1]
+            safe_filename = f"{id_contrato}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.{ext}"
+            
+            file_bytes = await soporte_medico.read()
+            supabase_client.storage.from_("soportes_incapacidades").upload(
+                safe_filename,
+                file_bytes,
+                file_options={"content-type": soporte_medico.content_type}
+            )
+            # Almacenar únicamente el path interno por privacidad (No usar get_public_url)
+            nuevo_ausentismo.soporte_url = safe_filename
+
+        db.commit()
+        db.refresh(nuevo_ausentismo)
+        return {
+            "status": "success",
+            "message": "Ausentismo registrado correctamente",
+            "data": {
+                "id_ausentismo": str(nuevo_ausentismo.id_ausentismo),
+                "tipo_novedad": nuevo_ausentismo.tipo_novedad,
+                "fecha_inicio": str(nuevo_ausentismo.fecha_inicio),
+                "fecha_fin": str(nuevo_ausentismo.fecha_fin),
+                "dias_totales": float(nuevo_ausentismo.dias_totales),
+                "soporte_url": nuevo_ausentismo.soporte_url
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error al registrar el ausentismo o subir el soporte: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/v1/ausentismos/{id_ausentismo}")
+def eliminar_ausentismo(id_ausentismo: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    try:
+        ausentismo = db.query(models.Ausentismo).filter(models.Ausentismo.id_ausentismo == id_ausentismo).first()
+        if not ausentismo:
+            raise HTTPException(status_code=404, detail="Ausentismo no encontrado")
+        
+        if ausentismo.soporte_url and not ausentismo.soporte_url.startswith("http"):
+            clean_path = ausentismo.soporte_url.strip()
+            try:
+                res = supabase_client.storage.from_("soportes_incapacidades").remove([clean_path])
+                print(f"[STORAGE] Intento de eliminar '{clean_path}'. Respuesta: {res}")
+            except Exception as e:
+                print(f"[STORAGE] Error al eliminar archivo físico: {e}")
+
+        # Después de intentar borrar el archivo, borramos el registro
+        try:
+            db.delete(ausentismo)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Error eliminando registro en BD")
+            
+        return {"status": "success", "message": "Ausentismo eliminado correctamente"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error al eliminar ausentismo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/ausentismos/{id_ausentismo}/soporte")
+def ver_soporte_ausentismo(id_ausentismo: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    ausentismo = db.query(models.Ausentismo).filter(models.Ausentismo.id_ausentismo == id_ausentismo).first()
+    if not ausentismo:
+        raise HTTPException(status_code=404, detail="Ausentismo no encontrado")
+    if not ausentismo.soporte_url:
+        raise HTTPException(status_code=404, detail="El ausentismo no tiene soporte adjunto")
+    
+    if ausentismo.soporte_url.startswith("http"):
+        return {"url": ausentismo.soporte_url}
+
+    clean_path = ausentismo.soporte_url.strip()
+    
+    # --- RADAR DE DEBUG ---
+    try:
+        lista_archivos = supabase_client.storage.from_("soportes_incapacidades").list()
+        nombres_reales = [f.get("name") for f in lista_archivos] if lista_archivos else []
+        print(f"[RADAR] Buscando en BD: '{clean_path}'")
+        print(f"[RADAR] Archivos en Bucket: {nombres_reales}")
+        if clean_path not in nombres_reales:
+            print(f"[RADAR ALERTA] '{clean_path}' NO coincide exactamente con ningún archivo en el bucket.")
+    except Exception as e:
+        print(f"[RADAR] Fallo listando archivos: {e}")
+    # ----------------------
+
+    try:
+        res = supabase_client.storage.from_("soportes_incapacidades").create_signed_url(clean_path, 60)
+        
+        # Validar si Supabase devolvió un error (dict con 'error')
+        if isinstance(res, dict) and res.get("error"):
+            logging.error(f"Error de Supabase Storage: {res}")
+            raise HTTPException(status_code=404, detail="El archivo físico no se encontró en el servidor de almacenamiento.")
+            
+        signed_url = res.get("signedURL") if isinstance(res, dict) else res
+        return {"url": signed_url}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error crítico generando Signed URL: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar el documento.")
+
+from core.pila_engine import generar_txt_pila
+import urllib.parse
+
+@app.get("/api/v1/pila/descargar-txt/{id_aportante}/{periodo}/{quincena}")
+def descargar_pila_txt(id_aportante: str, periodo: str, quincena: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint para descargar el archivo plano PILA (TXT) generado al vuelo (Stateless).
+    SOLO para SUPERADMIN.
+    """
+    if str(current_user.get("rol", "")).upper() != "SUPERADMIN":
+        raise HTTPException(status_code=403, detail="Acceso denegado. Solo SUPERADMIN puede generar el archivo PILA.")
+    
+    try:
+        txt_content = generar_txt_pila(id_aportante, periodo, quincena, db)
+        
+        safe_periodo = urllib.parse.quote(periodo.replace(" ", "_"))
+        filename = f"PILA_{id_aportante}_{safe_periodo}_Q{quincena}.txt"
+        
+        return Response(
+            content=txt_content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logging.error(f"Error generando archivo PILA: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error interno generando PILA: {str(e)}")
+
+from core.simple_gateway import SimpleGateway
+from pydantic import BaseModel
+
+class ValidarPilaRequest(BaseModel):
+    id_aportante: str
+    periodo: str
+    quincena: str
+
+@app.post("/api/v1/pila/sandbox-validar")
+def validar_pila_sandbox(payload: ValidarPilaRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint de Integración Sandbox con Pago Simple.
+    SOLO SUPERADMIN.
+    """
+    if str(current_user.get("rol", "")).upper() != "SUPERADMIN":
+        raise HTTPException(status_code=403, detail="Acceso denegado. Solo SUPERADMIN.")
+    
+    try:
+        txt_content = generar_txt_pila(payload.id_aportante, payload.periodo, payload.quincena, db)
+        
+        # Validar
+        txt_bytes = txt_content.encode('utf-8')
+        gateway = SimpleGateway()
+        response_simple = gateway.validar_planilla(txt_bytes, "planilla.txt")
+        
+        return response_simple
+    except Exception as e:
+        import logging
+        logging.error(f"Error en sandbox validar PILA: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
