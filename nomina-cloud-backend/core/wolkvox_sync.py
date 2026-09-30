@@ -265,7 +265,14 @@ async def sync_empleados_from_wolkvox(id_aportante: str, razon_social: str, db: 
                         :departamento, :municipio, :riesgo_arl, :ccf, :arl, :link_drive
                     ) ON CONFLICT (id_contrato) DO UPDATE SET 
                         nombre_empleado = COALESCE(EXCLUDED.nombre_empleado, m_empleados.nombre_empleado),
+                        cargo = COALESCE(EXCLUDED.cargo, m_empleados.cargo),
+                        tipo_contrato = COALESCE(EXCLUDED.tipo_contrato, m_empleados.tipo_contrato),
+                        periodo_pago = COALESCE(EXCLUDED.periodo_pago, m_empleados.periodo_pago),
                         salario_base = COALESCE(EXCLUDED.salario_base, m_empleados.salario_base),
+                        vlr_bono = COALESCE(EXCLUDED.vlr_bono, m_empleados.vlr_bono),
+                        sal_especie = COALESCE(EXCLUDED.sal_especie, m_empleados.sal_especie),
+                        es_smlv = COALESCE(EXCLUDED.es_smlv, m_empleados.es_smlv),
+                        con_bono = COALESCE(EXCLUDED.con_bono, m_empleados.con_bono),
                         eps = COALESCE(EXCLUDED.eps, m_empleados.eps),
                         afp = COALESCE(EXCLUDED.afp, m_empleados.afp),
                         tiene_aux = COALESCE(EXCLUDED.tiene_aux, m_empleados.tiene_aux),
