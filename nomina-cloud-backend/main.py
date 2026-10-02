@@ -496,12 +496,29 @@ async def obtener_empleados_por_empleador(id_contacto: str, current_user: dict =
         
         empleados_limpios = await sync_empleados_from_wolkvox(id_contacto, razon_social, db)
         
+        # Filtrar para conservar únicamente los empleados que NO estén retirados
+        empleados_activos = [emp for emp in (empleados_limpios or []) if str(emp.get("ESTADO_EMPLEADO", "")).upper() != "RETIRADO"]
+        
+        # Validaciones de Estado Vacío
+        if empleados_limpios and len(empleados_activos) == 0:
+            raise HTTPException(
+                status_code=400, 
+                detail="El cliente (aportante) está vigente, pero actualmente no tiene ningún empleado activo."
+            )
+        elif len(empleados_activos) == 0:
+            raise HTTPException(
+                status_code=400, 
+                detail="El cliente (aportante) está vigente, pero no se encontraron empleados asociados."
+            )
+            
         return {
             "status": "success",
             "empleador": razon_social,
             "carpeta_cliente": resultado_admin.get("carpeta_cliente") if resultado_admin else None,
-            "data": empleados_limpios
+            "data": empleados_activos
         }
+    except HTTPException:
+        raise # Permitir que los errores 400 y 403 suban limpios al cliente
     except Exception as e:
         if id_contacto.upper() == "EMP-001":
             return await _mock_fallback()
