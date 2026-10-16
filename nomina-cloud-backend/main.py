@@ -48,7 +48,7 @@ NOMBRES_EXTRAS = {
     'HEDF': 'HR. EXTRA DOM/FEST DIURNA (2.05)',
     'HENF': 'HR. EXTRA DOM/FEST NOCTURNA (2.55)',
     'RN': 'RECARGO NOCTURNO (0.35)',
-    'RDN': 'RECARGO DOM/FEST DIURNO (0.80)',
+    'RDN': 'RECARGO DOM/FEST DIURNO (0.90)',
     'RNF': 'RECARGO FESTIVO NOCTURNO (1.15)'
 }
 
@@ -968,7 +968,7 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
     PORCENTAJE_LEY = 0.04
 
     FACTORES = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
-                'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
+                'HENF': 2.55, 'RN': 0.35, 'RDN': 0.90, 'RNF': 1.15}
 
     df_final.columns = df_final.columns.str.strip().str.upper()
 
@@ -1371,7 +1371,7 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
 
     HR_MES = 210
     factores_dict = {'HED': 1.25, 'HEN': 1.75, 'HEDF': 2.05,
-                     'HENF': 2.55, 'RN': 0.35, 'RDN': 0.80, 'RNF': 1.15}
+                     'HENF': 2.55, 'RN': 0.35, 'RDN': 0.90, 'RNF': 1.15}
 
     periodo_liq = formatear_periodo(row.get('PERIODO_LIQ') or 'SIN PERIODO')
     quincena_pago = str(row.get('QUINCENA_PAGO') or "").strip().upper()
