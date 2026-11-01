@@ -6,6 +6,7 @@ import ResetPassword from "./components/ResetPassword";
 import ResumenNomina from "./components/ResumenNomina";
 import DashboardHistorico from "./components/DashboardHistorico";
 import DashboardAuditoria from "./components/DashboardAuditoria";
+import SandboxPila from "./components/SandboxPila";
 import IdleTimer from "./components/IdleTimer";
 import { supabase } from "./lib/supabaseClient";
 import { apiClient } from "./lib/apiClient";
@@ -1363,6 +1364,14 @@ function App() {
                   5. Auditoría (Staff)
                 </button>
               )}
+              {perfilAportante?.rol === "SUPERADMIN" && (
+                <button
+                  onClick={() => setActiveTab("sandbox_pila")}
+                  className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === "sandbox_pila" ? "bg-[#83a9b2] text-white shadow-md" : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"}`}
+                >
+                  6. Sandbox PILA (Dev)
+                </button>
+              )}
             </div>
           </div>
 
@@ -2438,10 +2447,7 @@ function App() {
                               </span>
                               <span className="text-rose-600 text-sm font-black">
                                 -$
-                                {(
-                                  (resultado.TOTAL_DEDUCIDO || 0) +
-                                  (resultado.SALARIO_ESPECIE_MES || 0)
-                                ).toLocaleString("es-CO")}
+                                {(resultado.TOTAL_DEDUCIDO || 0).toLocaleString("es-CO")}
                               </span>
                             </div>
                           </div>
@@ -2547,6 +2553,10 @@ function App() {
 
           {activeTab === "historico" && (
             <DashboardHistorico idAportante={empleadorId} />
+          )}
+
+          {activeTab === "sandbox_pila" && perfilAportante?.rol === "SUPERADMIN" && (
+            <SandboxPila perfilAportante={perfilAportante} />
           )}
 
           {activeTab === "reportes" && (perfilAportante?.rol === "SUPERADMIN" || perfilAportante?.rol === "ADMINISTRADOR") && (

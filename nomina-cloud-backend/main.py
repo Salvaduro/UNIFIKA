@@ -1192,10 +1192,13 @@ def liquidar_nomina(payload: List[Dict[str, Any]] = Body(...), current_user: dic
         df_final['PRIMA_CALC']
     )
 
-    df_final['TOTAL_DEDUCIDO'] = df_final['SALUD_4'] + \
-        df_final['PENSION_4'] + df_final['PRESTAMOS']
-    df_final['NETO_PAGAR'] = df_final['TOTAL_DEVENGADO'] - \
-        df_final['TOTAL_DEDUCIDO'] - df_final['SALARIO_ESPECIE_MES']
+    df_final['TOTAL_DEDUCIDO'] = (
+        df_final['SALUD_4'] +
+        df_final['PENSION_4'] +
+        df_final['PRESTAMOS'] +
+        df_final['SALARIO_ESPECIE_MES']
+    )
+    df_final['NETO_PAGAR'] = df_final['TOTAL_DEVENGADO'] - df_final['TOTAL_DEDUCIDO']
 
     # --- 7. VALIDACIÓN DE ESTADO DEL EMPLEADO ---
     es_retirado = estado_empleado == 'RETIRADO'
@@ -1510,12 +1513,18 @@ def generar_comprobante(row: Dict[str, Any] = Body(...)):
     # LÍNEA FINAL DE LA TABLA
     pdf.cell(190, 0, "", border='T', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
+    total_deducido_pdf = (
+        forzar_numero(row.get('SALUD_4', 0)) +
+        forzar_numero(row.get('PENSION_4', 0)) +
+        forzar_numero(row.get('PRESTAMOS', 0)) +
+        forzar_numero(row.get('SALARIO_ESPECIE_MES', 0))
+    )
     # TOTALES
     pdf.set_font('helvetica', 'B', 10)
     pdf.cell(100, 8, "TOTALES", border=1, align='R', fill=True)
     pdf.cell(45, 8, f"{forzar_numero(row.get('TOTAL_DEVENGADO', 0)):,.0f}",
              border=1, align='R', fill=True)
-    pdf.cell(45, 8, f"{forzar_numero(row.get('TOTAL_DEDUCIDO', 0)):,.0f}",
+    pdf.cell(45, 8, f"{total_deducido_pdf:,.0f}",
              border=1, align='R', fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # NETO A PAGAR
