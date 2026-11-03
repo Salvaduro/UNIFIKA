@@ -2094,11 +2094,21 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                 
                 for emp in activos:
                     try:
+                        periodo_pago_emp = str(emp.periodo_pago or "QUINCENAL").strip().upper()
+                        es_mensual = periodo_pago_emp in ["MENSUAL", "MENSUALIDAD"]
+
+                        # Si es corte de primera quincena ('1'), ignorar empleados de pago mensual
+                        if quincena_pago == '1' and es_mensual:
+                            continue
+
+                        # En fin de mes ('2'), los mensuales se registran con 'M' y los quincenales con '2'
+                        quincena_emp = 'M' if es_mensual else quincena_pago
+
                         # Prevención de Duplicados
                         existente = db.query(models.Novedad).filter_by(
                             id_contrato=emp.id_contrato,
                             periodo_liq=periodo_liq,
-                            quincena_pago=quincena_pago
+                            quincena_pago=quincena_emp
                         ).first()
                         if existente:
                             continue
@@ -2120,7 +2130,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     id_novedad=str(uuid.uuid4()),
                                     id_contrato=emp.id_contrato,
                                     periodo_liq=periodo_liq,
-                                    quincena_pago=quincena_pago,
+                                    quincena_pago=quincena_emp,
                                     generar_nomina=True,
                                     hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
                                     dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
@@ -2138,7 +2148,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     id_novedad=str(uuid.uuid4()),
                                     id_contrato=emp.id_contrato,
                                     periodo_liq=periodo_liq,
-                                    quincena_pago=quincena_pago,
+                                    quincena_pago=quincena_emp,
                                     generar_nomina=True,
                                     hed=0, hen=0, hedf=0, henf=0, rn=0, rdn=0, rnf=0,
                                     dias_vacaciones=0, dias_incapacidad=0, prestamos=0,
@@ -2208,7 +2218,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                       AND n.periodo_liq = :periodo
                                       AND n.quincena_pago = :quincena
                                 """)
-                                row_pdf = db.execute(query_pdf, {"id_contrato": emp.id_contrato, "periodo": periodo_liq, "quincena": quincena_pago}).mappings().first()
+                                row_pdf = db.execute(query_pdf, {"id_contrato": emp.id_contrato, "periodo": periodo_liq, "quincena": quincena_emp}).mappings().first()
                                 
                                 if row_pdf:
                                     row_dict = {k.upper(): v for k, v in dict(row_pdf).items()}
@@ -2247,13 +2257,13 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                     response_pdf = generar_comprobante(row_dict)
                                     pdf_bytes = response_pdf.body
                                     attachments.append({
-                                        "filename": f"Desprendible_{emp.id_contrato}_{periodo_liq}_{quincena_pago}.pdf",
+                                        "filename": f"Desprendible_{emp.id_contrato}_{periodo_liq}_{quincena_emp}.pdf",
                                         "content": list(pdf_bytes)
                                     })
                                 
                                 html_content = f"""
                                 <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
-                                    <p>Adjunto encontrará el borrador de su pre-liquidación para la quincena {quincena_pago} del periodo {periodo_liq}.</p>
+                                    <p>Adjunto encontrará el borrador de su pre-liquidación para la quincena {quincena_emp} del periodo {periodo_liq}.</p>
                                     <p><strong>Por motivos de seguridad y auditoría, para aprobar esta nómina o realizar ajustes, por favor inicie sesión en la plataforma haciendo clic en los botones.</strong></p>
                                     <div style="margin-top: 25px;">
                                         <a href="https://app.unifika.co/" style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-right: 15px; font-weight: bold; display: inline-block;">Aprobada</a>
@@ -2265,7 +2275,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                 periodo_pago_cron = str(emp.periodo_pago).strip().upper() if emp.periodo_pago else 'QUINCENAL'
                                 
                                 if periodo_pago_cron == "QUINCENAL":
-                                    sufijo_pago_cron = f"Quincena {quincena_pago}"
+                                    sufijo_pago_cron = f"Quincena {quincena_emp}"
                                 else:
                                     sufijo_pago_cron = "Mensualidad"
                                 
@@ -2286,7 +2296,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                                 "accion": "CREAR_NOVEDAD",
                                 "id_contrato": emp.id_contrato,
                                 "periodo": periodo_liq,
-                                "quincena": quincena_pago
+                                "quincena": quincena_emp
                             })
                             if emp.aportante and emp.aportante.email:
                                 acciones_simuladas.append({
@@ -2314,20 +2324,22 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                     logger.info(f"Cron procesar_ciclo_background: Pre-liquidación generada para {len(nuevas_novedades)} contratos.")
                 
             elif accion == 'CERRAR':
+                quincenas_a_cerrar = ['2', 'M'] if quincena_pago == '2' else [quincena_pago]
+                
                 query_sql = """
-                    SELECT n.id_contrato 
+                    SELECT n.id_contrato, n.quincena_pago 
                     FROM t_novedades n
                     LEFT JOIN t_cierres_nomina c ON n.id_contrato = c.id_contrato 
                                                 AND n.periodo_liq = c.periodo_liq 
                                                 AND n.quincena_pago = c.quincena_pago
                 """
-                params = {"periodo": periodo_liq, "quincena": quincena_pago}
+                params = {"periodo": periodo_liq, "quincenas": tuple(quincenas_a_cerrar)}
                 
                 if target_aportante:
                     query_sql += """
                     INNER JOIN m_empleados e ON n.id_contrato = e.id_contrato
                     WHERE n.periodo_liq = :periodo
-                      AND n.quincena_pago = :quincena
+                      AND n.quincena_pago IN :quincenas
                       AND c.id_cierre IS NULL
                       AND e.id_aportante = :target_aportante
                     """
@@ -2335,7 +2347,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                 else:
                     query_sql += """
                     WHERE n.periodo_liq = :periodo
-                      AND n.quincena_pago = :quincena
+                      AND n.quincena_pago IN :quincenas
                       AND c.id_cierre IS NULL
                     """
                     
@@ -2348,7 +2360,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                         id_cierre=str(uuid.uuid4()),
                         id_contrato=row[0],
                         periodo_liq=periodo_liq,
-                        quincena_pago=quincena_pago,
+                        quincena_pago=row[1],
                         cerrado_por="SISTEMA_CRON"
                     ))
                     if dry_run:
@@ -2356,7 +2368,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                             "accion": "CERRAR_NOMINA",
                             "id_contrato": row[0],
                             "periodo": periodo_liq,
-                            "quincena": quincena_pago
+                            "quincena": row[1]
                         })
                     
                 if cierres:
