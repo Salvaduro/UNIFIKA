@@ -1620,7 +1620,8 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
                        a.tipo_documento as tipo_documento,
                        a.tipo_empleador as tipo_empleador,
                        a.id_aportante as id_aportante,
-                       a.email as email_aportante
+                       a.email as email_aportante,
+                       a.estado_contacto as estado_contacto
                 FROM m_empleados e
                 JOIN t_novedades n ON e.id_contrato = n.id_contrato
                 LEFT JOIN m_aportantes a ON e.id_aportante = a.id_aportante
@@ -1632,6 +1633,13 @@ def enviar_desprendibles(payload: EnviarDesprendiblesRequest, db: Session = Depe
                              
             if not row:
                 continue
+                
+            estado_contacto_emp = str(row.get("estado_contacto") or "").strip().upper()
+            if estado_contacto_emp in ["RETIRADO", "EN MORA SS", "UNICA AFILIACION", "UNICAAFILIACION"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"No se puede enviar el desprendible: el empleador se encuentra en estado '{row.get('estado_contacto')}'."
+                )
                 
             row_dict_raw = {k.upper(): v for k, v in dict(row).items()}
             
@@ -2078,7 +2086,7 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
         
         try:
             if accion == 'PRELIQUIDAR':
-                query_activos = db.query(models.Empleado).filter(
+                query_activos = db.query(models.Empleado).join(models.Aportante).filter(
                     models.Empleado.estado_empleado.notin_(['RETIRADO', 'En Mora SS', 'UnicaAfiliacion'])
                 )
                 if target_aportante:
@@ -2092,8 +2100,12 @@ def procesar_ciclo_background(dry_run: bool, target_aportante: str, target_date_
                 nuevas_novedades = []
                 mail_from = os.environ.get("MAIL_FROM", "nomina@unifika.co")
                 
+                estados_aportante_restringidos = ["RETIRADO", "EN MORA SS", "UNICA AFILIACION", "UNICAAFILIACION"]
                 for emp in activos:
                     try:
+                        estado_aportante = str(emp.aportante.estado_contacto or "").strip().upper() if emp.aportante else ""
+                        if estado_aportante in estados_aportante_restringidos:
+                            continue
                         periodo_pago_emp = str(emp.periodo_pago or "QUINCENAL").strip().upper()
                         es_mensual = periodo_pago_emp in ["MENSUAL", "MENSUALIDAD"]
 
