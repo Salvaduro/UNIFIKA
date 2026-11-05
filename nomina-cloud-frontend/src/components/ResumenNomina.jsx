@@ -333,6 +333,35 @@ export default function ResumenNomina({
     });
   };
 
+  const handleDescargarPila = async () => {
+    try {
+      const targetId = idAportante || "me";
+      const url = `${import.meta.env.VITE_API_URL}/api/v1/pila/descargar-txt/${encodeURIComponent(targetId)}/${encodeURIComponent(periodo)}/${encodeURIComponent(quincena)}`;
+      const response = await apiClient(url);
+      if (!response.ok) {
+        let errData = {};
+        try { errData = await response.json(); } catch(e) {}
+        throw new Error(errData.detail || "Error al descargar el archivo PILA");
+      }
+      
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      const safePeriodo = String(periodo).replace(/\s+/g, "_");
+      link.setAttribute("download", `PILA_${targetId}_${safePeriodo}_Q${quincena}.txt`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+      
+      toast.success("Archivo PILA descargado exitosamente");
+    } catch (error) {
+      console.error("Error al descargar PILA:", error);
+      toast.error(error.message || "Error al descargar el archivo PILA");
+    }
+  };
+
   return (
     <div className="w-full animate-fade-in space-y-8">
       {/* Título Contextual */}
@@ -557,8 +586,8 @@ export default function ResumenNomina({
         </div>
       )}
 
-      {/* Botón de Enviar Desprendibles (Siempre Visible) */}
-      <div className="flex justify-center pb-12">
+      {/* Botón de Enviar Desprendibles y PILA */}
+      <div className="flex justify-center pb-12 gap-4 flex-wrap">
         <button
           type="button"
           onClick={handleEnviarCorreos}
@@ -580,6 +609,24 @@ export default function ResumenNomina({
           </svg>
           {isSendingEmails ? "Enviando Correos..." : "✉️ Enviar Desprendibles por Correo"}
         </button>
+
+        {String(perfilAportante?.rol || "").toUpperCase().trim() === "SUPERADMIN" && (
+          <button
+            type="button"
+            onClick={handleDescargarPila}
+            className="inline-flex items-center justify-center gap-3 font-bold py-3 px-8 text-md transition-colors duration-200 rounded-lg shadow-sm focus:outline-none border bg-white text-emerald-600 border-emerald-600 hover:bg-emerald-600 hover:text-white"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+            </svg>
+            Descargar Archivo PILA (TXT)
+          </button>
+        )}
       </div>
       <ConfirmModal
         isOpen={confirmModal.isOpen}
